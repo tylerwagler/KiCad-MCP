@@ -13,6 +13,15 @@ BLINKY_PATH = Path(r"C:\Users\tyler\Dev\repos\test_PCB\blinky.kicad_pcb")
 
 skip_no_board = pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
 
+# Check if KiCad libraries are available for footprint resolution tests
+_RESISTOR_MOD = Path(
+    r"C:\Program Files\KiCad\9.0\share\kicad\footprints"
+    r"\Resistor_SMD.pretty\R_0402_1005Metric.kicad_mod"
+)
+skip_no_libs = pytest.mark.skipif(
+    not _RESISTOR_MOD.exists(), reason="KiCad footprint libraries not installed"
+)
+
 
 @skip_no_board
 class TestRotateComponent:
@@ -271,9 +280,7 @@ class TestPlacementToolHandlers:
         start = TOOL_REGISTRY["start_session"].handler()
         sid = start["session_id"]
 
-        result = TOOL_REGISTRY["rotate_component"].handler(
-            session_id=sid, reference="C7", angle=90
-        )
+        result = TOOL_REGISTRY["rotate_component"].handler(session_id=sid, reference="C7", angle=90)
         assert result["status"] == "rotated"
 
     def test_flip_component_tool(self) -> None:
@@ -293,3 +300,210 @@ class TestPlacementToolHandlers:
 
         result = TOOL_REGISTRY["delete_component"].handler(session_id=sid, reference="C7")
         assert result["status"] == "deleted"
+
+
+# ── Library-resolved footprint placement tests ─────────────────────
+
+
+@skip_no_board
+@skip_no_libs
+class TestPlaceWithLibraryResolution:
+    """Verify place_component creates footprints with pads from KiCad libs."""
+
+    def _make_session(self):
+        doc = Document.load(str(BLINKY_PATH))
+        mgr = SessionManager()
+        return mgr, mgr.start_session(doc)
+
+    def test_place_resolves_pads(self) -> None:
+        mgr, session = self._make_session()
+        mgr.apply_place(
+            session,
+            footprint_library="Resistor_SMD:R_0402_1005Metric",
+            reference="R99",
+            value="10k",
+            x=50,
+            y=25,
+        )
+        fp = mgr._find_footprint(session._working_doc, "R99")
+        pads = fp.find_all("pad")
+        assert len(pads) >= 2, f"Expected pads, got {len(pads)}"
+
+    def test_place_preserves_position_with_library(self) -> None:
+        mgr, session = self._make_session()
+        mgr.apply_place(
+            session,
+            footprint_library="Resistor_SMD:R_0402_1005Metric",
+            reference="R99",
+            value="10k",
+            x=42.5,
+            y=17.3,
+        )
+        fp = mgr._find_footprint(session._working_doc, "R99")
+        at_node = fp.get("at")
+        assert float(at_node.atom_values[0]) == 42.5
+        assert float(at_node.atom_values[1]) == 17.3
+
+    def test_place_preserves_reference_with_library(self) -> None:
+        mgr, session = self._make_session()
+        mgr.apply_place(
+            session,
+            footprint_library="Resistor_SMD:R_0402_1005Metric",
+            reference="R99",
+            value="4.7k",
+            x=50,
+            y=25,
+        )
+        fp = mgr._find_footprint(session._working_doc, "R99")
+        for prop in fp.find_all("property"):
+            if prop.first_value == "Reference":
+                assert prop.atom_values[1] == "R99"
+                break
+        else:
+            pytest.fail("Reference property not found")
+
+    def test_place_preserves_value_with_library(self) -> None:
+        mgr, session = self._make_session()
+        mgr.apply_place(
+            session,
+            footprint_library="Resistor_SMD:R_0402_1005Metric",
+            reference="R99",
+            value="4.7k",
+            x=50,
+            y=25,
+        )
+        fp = mgr._find_footprint(session._working_doc, "R99")
+        for prop in fp.find_all("property"):
+            if prop.first_value == "Value":
+                assert prop.atom_values[1] == "4.7k"
+                break
+        else:
+            pytest.fail("Value property not found")
+
+    def test_place_undo_with_library(self) -> None:
+        mgr, session = self._make_session()
+        before_count = len(session._working_doc.root.find_all("footprint"))
+
+        mgr.apply_place(
+            session,
+            footprint_library="Resistor_SMD:R_0402_1005Metric",
+            reference="R99",
+            value="10k",
+            x=50,
+            y=25,
+        )
+        mgr.undo(session)
+
+        after_count = len(session._working_doc.root.find_all("footprint"))
+        assert after_count == before_count
+        assert mgr._find_footprint(session._working_doc, "R99") is None
+
+    def test_place_library_name_before_at(self) -> None:
+        """KiCad requires (footprint "name" ... (at X Y)) — name before at."""
+        mgr, session = self._make_session()
+        mgr.apply_place(
+            session,
+            footprint_library="Resistor_SMD:R_0402_1005Metric",
+            reference="R99",
+            value="10k",
+            x=50,
+            y=25,
+        )
+        fp = mgr._find_footprint(session._working_doc, "R99")
+        sexp_str = fp.to_string()
+        # The library name must appear before (at ...)
+        name_pos = sexp_str.find("R_0402_1005Metric")
+        at_pos = sexp_str.find("(at ")
+        assert name_pos < at_pos, (
+            f"Library name at {name_pos} must come before (at ...) at {at_pos}. "
+            f"Got: {sexp_str[:100]}..."
+        )
+
+    def test_place_pad_has_type_and_shape(self) -> None:
+        mgr, session = self._make_session()
+        mgr.apply_place(
+            session,
+            footprint_library="Resistor_SMD:R_0402_1005Metric",
+            reference="R99",
+            value="10k",
+            x=50,
+            y=25,
+        )
+        fp = mgr._find_footprint(session._working_doc, "R99")
+        pads = fp.find_all("pad")
+        for pad in pads:
+            vals = pad.atom_values
+            assert len(vals) >= 3, f"Pad missing type/shape: {vals}"
+
+
+@skip_no_board
+class TestPlaceFallbackSkeleton:
+    """Verify fallback to skeleton when library is not available."""
+
+    def _make_session(self):
+        doc = Document.load(str(BLINKY_PATH))
+        mgr = SessionManager()
+        return mgr, mgr.start_session(doc)
+
+    def test_place_nonexistent_library_still_places(self) -> None:
+        mgr, session = self._make_session()
+        record = mgr.apply_place(
+            session,
+            footprint_library="NonExistent_Lib:FakeFootprint",
+            reference="X99",
+            value="test",
+            x=10,
+            y=10,
+        )
+        assert record.applied
+        fp = mgr._find_footprint(session._working_doc, "X99")
+        assert fp is not None
+
+    def test_skeleton_library_name_before_at(self) -> None:
+        """Even skeleton footprints must have name before (at ...)."""
+        mgr, session = self._make_session()
+        mgr.apply_place(
+            session,
+            footprint_library="NonExistent_Lib:FakeFootprint",
+            reference="X99",
+            value="test",
+            x=10,
+            y=10,
+        )
+        fp = mgr._find_footprint(session._working_doc, "X99")
+        sexp_str = fp.to_string()
+        name_pos = sexp_str.find("FakeFootprint")
+        at_pos = sexp_str.find("(at ")
+        assert name_pos < at_pos, f"Name must precede (at ...) in: {sexp_str[:100]}"
+
+
+@skip_no_board
+@skip_no_libs
+class TestReplaceWithLibraryResolution:
+    """Verify replace_component creates footprints with pads from KiCad libs."""
+
+    def _make_session(self):
+        doc = Document.load(str(BLINKY_PATH))
+        mgr = SessionManager()
+        return mgr, mgr.start_session(doc)
+
+    def test_replace_resolves_pads(self) -> None:
+        mgr, session = self._make_session()
+        mgr.apply_replace_component(session, "C7", "Resistor_SMD:R_0402_1005Metric", "10k")
+        fp = mgr._find_footprint(session._working_doc, "C7")
+        pads = fp.find_all("pad")
+        assert len(pads) >= 2, f"Expected pads, got {len(pads)}"
+
+    def test_replace_preserves_position_with_library(self) -> None:
+        mgr, session = self._make_session()
+        fp_before = mgr._find_footprint(session._working_doc, "C7")
+        at_before = fp_before.get("at")
+        x_before = float(at_before.atom_values[0])
+        y_before = float(at_before.atom_values[1])
+
+        mgr.apply_replace_component(session, "C7", "Resistor_SMD:R_0402_1005Metric", "10k")
+
+        fp_after = mgr._find_footprint(session._working_doc, "C7")
+        at_after = fp_after.get("at")
+        assert float(at_after.atom_values[0]) == x_before
+        assert float(at_after.atom_values[1]) == y_before

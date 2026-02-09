@@ -89,9 +89,7 @@ def _place_from_library_handler(
     mgr = _get_mgr()
     try:
         session = mgr.get_session(session_id)
-        record = mgr.place_from_kicad_mod(
-            session, kicad_mod_path, reference, value, x, y, layer
-        )
+        record = mgr.place_from_kicad_mod(session, kicad_mod_path, reference, value, x, y, layer)
         return {"status": "placed", "change": record.to_dict()}
     except KeyError:
         return {"error": f"Session {session_id!r} not found"}
@@ -314,9 +312,7 @@ def _group_components_handler(
     grouped = []
     for ref in references:
         try:
-            mgr.apply_edit_component(
-                session, ref, {"Group": group_name}
-            )
+            mgr.apply_edit_component(session, ref, {"Group": group_name})
             grouped.append(ref)
         except ValueError:
             pass

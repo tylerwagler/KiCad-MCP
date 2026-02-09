@@ -82,9 +82,7 @@ class TestReplaceComponent:
 
     def test_replace_component(self) -> None:
         mgr, session = self._make_session()
-        record = mgr.apply_replace_component(
-            session, "C7", "Cap_SMD:C_0805", "100nF"
-        )
+        record = mgr.apply_replace_component(session, "C7", "Cap_SMD:C_0805", "100nF")
         assert record.applied
         assert record.operation == "replace_component"
 
@@ -106,9 +104,7 @@ class TestReplaceComponent:
     def test_replace_not_found(self) -> None:
         mgr, session = self._make_session()
         with pytest.raises(ValueError, match="not found"):
-            mgr.apply_replace_component(
-                session, "NONEXISTENT", "Cap_SMD:C_0805", "100nF"
-            )
+            mgr.apply_replace_component(session, "NONEXISTENT", "Cap_SMD:C_0805", "100nF")
 
     def test_replace_undo(self) -> None:
         mgr, session = self._make_session()
@@ -236,9 +232,7 @@ class TestAddNetClass:
 
     def test_add_net_class_with_nets(self) -> None:
         mgr, session = self._make_session()
-        record = mgr.apply_add_net_class(
-            session, "Power", nets=["VBUS", "GND"]
-        )
+        record = mgr.apply_add_net_class(session, "Power", nets=["VBUS", "GND"])
         assert record.applied
 
     def test_add_net_class_undo(self) -> None:
@@ -263,9 +257,7 @@ class TestSetLayerConstraints:
 
     def test_set_layer_constraints(self) -> None:
         mgr, session = self._make_session()
-        record = mgr.apply_set_layer_constraints(
-            session, "F.Cu", min_width=0.15, min_clearance=0.2
-        )
+        record = mgr.apply_set_layer_constraints(session, "F.Cu", min_width=0.15, min_clearance=0.2)
         assert record.applied
         assert record.operation == "set_layer_constraints"
 
@@ -351,18 +343,14 @@ class TestCheckClearance:
     def test_check_clearance(self) -> None:
         from kicad_mcp.tools import TOOL_REGISTRY
 
-        result = TOOL_REGISTRY["check_clearance"].handler(
-            reference_a="C7", reference_b="R2"
-        )
+        result = TOOL_REGISTRY["check_clearance"].handler(reference_a="C7", reference_b="R2")
         assert "min_clearance_mm" in result
         assert result["min_clearance_mm"] >= 0
 
     def test_check_clearance_has_center_distance(self) -> None:
         from kicad_mcp.tools import TOOL_REGISTRY
 
-        result = TOOL_REGISTRY["check_clearance"].handler(
-            reference_a="C7", reference_b="R2"
-        )
+        result = TOOL_REGISTRY["check_clearance"].handler(reference_a="C7", reference_b="R2")
         assert "center_distance_mm" in result
         assert result["center_distance_mm"] > 0
 
@@ -377,9 +365,7 @@ class TestCheckClearance:
     def test_check_clearance_has_closest_pair(self) -> None:
         from kicad_mcp.tools import TOOL_REGISTRY
 
-        result = TOOL_REGISTRY["check_clearance"].handler(
-            reference_a="C7", reference_b="R2"
-        )
+        result = TOOL_REGISTRY["check_clearance"].handler(reference_a="C7", reference_b="R2")
         if "closest_pair" in result and result["closest_pair"]:
             assert len(result["closest_pair"]) == 2
 

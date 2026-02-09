@@ -99,9 +99,7 @@ def _create_zone_handler(
     try:
         session = mgr.get_session(session_id)
         tuples = [(p[0], p[1]) for p in points]
-        record = mgr.apply_create_zone(
-            session, net_name, layer, tuples, min_thickness, priority
-        )
+        record = mgr.apply_create_zone(session, net_name, layer, tuples, min_thickness, priority)
         return {"status": "created", "change": record.to_dict()}
     except KeyError:
         return {"error": f"Session {session_id!r} not found"}

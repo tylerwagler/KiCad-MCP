@@ -21,9 +21,7 @@ FP_DIR = Path(r"C:\Program Files\KiCad\9.0\share\kicad\footprints")
 DEVICE_LIB = SYM_DIR / "Device.kicad_sym"
 RESISTOR_SMD_DIR = FP_DIR / "Resistor_SMD.pretty"
 
-skip_no_kicad = pytest.mark.skipif(
-    not SYM_DIR.exists(), reason="KiCad libraries not installed"
-)
+skip_no_kicad = pytest.mark.skipif(not SYM_DIR.exists(), reason="KiCad libraries not installed")
 
 
 @skip_no_kicad
@@ -153,18 +151,21 @@ class TestSearchSymbols:
     def test_search_resistor(self) -> None:
         # Restrict to Device library for speed
         from kicad_mcp.schema.library import LibraryEntry
+
         libs = [LibraryEntry("Device", "KiCad", str(DEVICE_LIB), "")]
         results = search_symbols("Resistor", libraries=libs, max_results=10)
         assert len(results) > 0
 
     def test_search_respects_max(self) -> None:
         from kicad_mcp.schema.library import LibraryEntry
+
         libs = [LibraryEntry("Device", "KiCad", str(DEVICE_LIB), "")]
         results = search_symbols("R", libraries=libs, max_results=5)
         assert len(results) <= 5
 
     def test_search_no_results(self) -> None:
         from kicad_mcp.schema.library import LibraryEntry
+
         libs = [LibraryEntry("Device", "KiCad", str(DEVICE_LIB), "")]
         results = search_symbols("xyznonexistent99999", libraries=libs)
         assert len(results) == 0
@@ -174,18 +175,21 @@ class TestSearchSymbols:
 class TestSearchFootprints:
     def test_search_0402(self) -> None:
         from kicad_mcp.schema.library import LibraryEntry
+
         libs = [LibraryEntry("Resistor_SMD", "KiCad", str(RESISTOR_SMD_DIR), "")]
         results = search_footprints("0402", libraries=libs, max_results=10)
         assert len(results) > 0
 
     def test_search_respects_max(self) -> None:
         from kicad_mcp.schema.library import LibraryEntry
+
         libs = [LibraryEntry("Resistor_SMD", "KiCad", str(RESISTOR_SMD_DIR), "")]
         results = search_footprints("0402", libraries=libs, max_results=5)
         assert len(results) <= 5
 
     def test_search_no_results(self) -> None:
         from kicad_mcp.schema.library import LibraryEntry
+
         libs = [LibraryEntry("Resistor_SMD", "KiCad", str(RESISTOR_SMD_DIR), "")]
         results = search_footprints("xyznonexistent99999", libraries=libs)
         assert len(results) == 0

@@ -186,9 +186,7 @@ class TestSchematicMutation:
         from kicad_mcp.tools import TOOL_REGISTRY
 
         TOOL_REGISTRY["open_schematic"].handler(schematic_path=str(SCH_V3))
-        result = TOOL_REGISTRY["add_wire"].handler(
-            start_x=50, start_y=50, end_x=60, end_y=50
-        )
+        result = TOOL_REGISTRY["add_wire"].handler(start_x=50, start_y=50, end_x=60, end_y=50)
         assert result["status"] == "added"
         assert "uuid" in result
 

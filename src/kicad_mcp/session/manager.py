@@ -145,9 +145,7 @@ class SessionManager:
 
     def _require_active(self, session: Session) -> None:
         if session.state != SessionState.ACTIVE:
-            raise RuntimeError(
-                f"Session {session.session_id} is {session.state.value}, not active"
-            )
+            raise RuntimeError(f"Session {session.session_id} is {session.state.value}, not active")
 
     # ── Move ────────────────────────────────────────────────────────
 
@@ -167,12 +165,8 @@ class SessionManager:
             return {"error": f"Component {reference!r} not found"}
 
         at_node = fp_node.get("at")
-        current_x = (
-            float(at_node.atom_values[0]) if at_node and len(at_node.atom_values) > 0 else 0
-        )
-        current_y = (
-            float(at_node.atom_values[1]) if at_node and len(at_node.atom_values) > 1 else 0
-        )
+        current_x = float(at_node.atom_values[0]) if at_node and len(at_node.atom_values) > 0 else 0
+        current_y = float(at_node.atom_values[1]) if at_node and len(at_node.atom_values) > 1 else 0
 
         return {
             "operation": "move_component",
@@ -382,9 +376,13 @@ class SessionManager:
         if existing is not None:
             raise ValueError(f"Component {reference!r} already exists on the board")
 
-        fp_node = self._build_footprint_node(
-            footprint_library, reference, value, x, y, layer
-        )
+        # Try to resolve the full footprint from installed KiCad libraries
+        mod_path = self._resolve_kicad_mod_path(footprint_library)
+        if mod_path is not None:
+            return self.place_from_kicad_mod(session, mod_path, reference, value, x, y, layer)
+
+        # Fallback: create a skeleton footprint (no pads)
+        fp_node = self._build_footprint_node(footprint_library, reference, value, x, y, layer)
 
         # Append to the board root children
         session._working_doc.root.children.append(fp_node)
@@ -440,11 +438,20 @@ class SessionManager:
         raw = mod_path.read_text(encoding="utf-8")
         fp_node = sexp_parse(raw)
 
-        # Update position
+        # Update position — insert after the library name atom (first child),
+        # not at position 0 which would break KiCad's expected ordering:
+        # (footprint "LibName" (layer ...) ... (at X Y) ...)
         at_node = fp_node.get("at")
         if at_node is None:
             at_node = _make_node("at", [_make_atom(str(x)), _make_atom(str(y))])
-            fp_node.children.insert(0, at_node)
+            # Find insertion point: after all leading atom children
+            insert_idx = 0
+            for i, child in enumerate(fp_node.children):
+                if child.is_atom:
+                    insert_idx = i + 1
+                else:
+                    break
+            fp_node.children.insert(insert_idx, at_node)
         else:
             at_node.children = [_make_atom(str(x)), _make_atom(str(y))]
 
@@ -499,6 +506,41 @@ class SessionManager:
         return record
 
     @staticmethod
+    def _resolve_kicad_mod_path(footprint_library: str) -> str | None:
+        """Try to resolve a library:footprint identifier to a .kicad_mod path.
+
+        Args:
+            footprint_library: e.g., "Resistor_SMD:R_0402_1005Metric"
+
+        Returns:
+            Path string to .kicad_mod file if found, None otherwise.
+        """
+        if ":" not in footprint_library:
+            return None
+
+        lib_name, fp_name = footprint_library.split(":", 1)
+
+        try:
+            from ..library import discover_lib_tables
+        except Exception:
+            return None
+
+        try:
+            tables = discover_lib_tables()
+        except Exception:
+            return None
+
+        from pathlib import Path
+
+        for entry in tables.get("footprint_libraries", []):
+            if entry.name == lib_name:
+                lib_dir = Path(entry.uri)
+                mod_path = lib_dir / f"{fp_name}.kicad_mod"
+                if mod_path.exists():
+                    return str(mod_path)
+        return None
+
+    @staticmethod
     def _build_footprint_node(
         library: str,
         reference: str,
@@ -507,7 +549,7 @@ class SessionManager:
         y: float,
         layer: str,
     ) -> SExp:
-        """Build a minimal footprint S-expression node."""
+        """Build a minimal footprint S-expression node (skeleton fallback)."""
         new_uuid = str(uuid.uuid4())
         sexp_text = (
             f'(footprint "{library}"'
@@ -520,7 +562,7 @@ class SessionManager:
             f' (property "Value" "{value}"'
             f' (at 0 1.5 0) (layer "F.Fab") (uuid "{uuid.uuid4()}")'
             f" (effects (font (size 1 1) (thickness 0.15))))"
-            f' (attr smd) (embedded_fonts no))'
+            f" (attr smd) (embedded_fonts no))"
         )
         return sexp_parse(sexp_text)
 
@@ -967,12 +1009,14 @@ class SessionManager:
                             else 0
                         )
                         pad_vals = pad_node.atom_values
-                        net_pads.setdefault(net_num, []).append({
-                            "reference": ref,
-                            "pad": pad_vals[0] if pad_vals else "",
-                            "x": fp_x + pad_x,
-                            "y": fp_y + pad_y,
-                        })
+                        net_pads.setdefault(net_num, []).append(
+                            {
+                                "reference": ref,
+                                "pad": pad_vals[0] if pad_vals else "",
+                                "x": fp_x + pad_x,
+                                "y": fp_y + pad_y,
+                            }
+                        )
 
         # Collect routed segment endpoints by net
         routed_nets: set[int] = set()
@@ -992,12 +1036,14 @@ class SessionManager:
                     if vals and int(vals[0]) == net_num:
                         net_name = vals[1] if len(vals) > 1 else ""
                         break
-                unrouted.append({
-                    "net_number": net_num,
-                    "net_name": net_name,
-                    "pad_count": len(pads),
-                    "pads": pads,
-                })
+                unrouted.append(
+                    {
+                        "net_number": net_num,
+                        "net_name": net_name,
+                        "pad_count": len(pads),
+                        "pads": pads,
+                    }
+                )
 
         return unrouted
 
@@ -1042,8 +1088,8 @@ class SessionManager:
         for x1, y1, x2, y2 in lines:
             line_uuid = str(uuid.uuid4())
             line_text = (
-                f'(gr_line (start {x1} {y1}) (end {x2} {y2})'
-                f' (stroke (width 0.05) (type default))'
+                f"(gr_line (start {x1} {y1}) (end {x2} {y2})"
+                f" (stroke (width 0.05) (type default))"
                 f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
             )
             line_node = sexp_parse(line_text)
@@ -1086,8 +1132,8 @@ class SessionManager:
             x2, y2 = points[(i + 1) % len(points)]
             line_uuid = str(uuid.uuid4())
             line_text = (
-                f'(gr_line (start {x1} {y1}) (end {x2} {y2})'
-                f' (stroke (width 0.05) (type default))'
+                f"(gr_line (start {x1} {y1}) (end {x2} {y2})"
+                f" (stroke (width 0.05) (type default))"
                 f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
             )
             line_node = sexp_parse(line_text)
@@ -1134,10 +1180,10 @@ class SessionManager:
             f' (layer "F.Cu") (uuid "{hole_uuid}") (at {x} {y})'
             f' (property "Reference" "H1"'
             f' (at 0 -{pad_dia / 2 + 1} 0) (layer "F.SilkS") (uuid "{ref_uuid}")'
-            f' (effects (font (size 1 1) (thickness 0.15))))'
+            f" (effects (font (size 1 1) (thickness 0.15))))"
             f' (property "Value" "MountingHole"'
             f' (at 0 {pad_dia / 2 + 1} 0) (layer "F.Fab") (uuid "{val_uuid}")'
-            f' (effects (font (size 1 1) (thickness 0.15))))'
+            f" (effects (font (size 1 1) (thickness 0.15))))"
             f' (pad "" np_thru_hole circle (at 0 0)'
             f" (size {pad_dia} {pad_dia}) (drill {drill})"
             f' (layers "*.Cu" "*.Mask")))'
@@ -1204,6 +1250,40 @@ class SessionManager:
         session.changes.append(record)
         return record
 
+    # Valid KiCad 9 setup keys that accept numeric design-rule values.
+    # Rules like min_track_width, min_via_diameter, etc. belong in the
+    # separate .kicad_dru (design rules) file, NOT in setup.
+    _VALID_SETUP_RULES: frozenset[str] = frozenset(
+        {
+            "pad_to_mask_clearance",
+            "solder_mask_min_width",
+            "pad_to_paste_clearance",
+            "pad_to_paste_clearance_ratio",
+        }
+    )
+
+    # Friendly aliases for the valid setup keys.
+    _RULE_ALIASES: dict[str, str] = {
+        "min_clearance": "pad_to_mask_clearance",
+        "mask_clearance": "pad_to_mask_clearance",
+        "mask_min_width": "solder_mask_min_width",
+        "paste_clearance": "pad_to_paste_clearance",
+        "paste_clearance_ratio": "pad_to_paste_clearance_ratio",
+    }
+
+    # Rules that callers commonly attempt but belong in .kicad_dru.
+    _DRU_ONLY_RULES: frozenset[str] = frozenset(
+        {
+            "min_track_width",
+            "min_via_diameter",
+            "min_via_drill",
+            "min_microvia_diameter",
+            "min_microvia_drill",
+            "min_through_hole_diameter",
+            "clearance",
+        }
+    )
+
     def apply_set_design_rules(
         self,
         session: Session,
@@ -1211,11 +1291,17 @@ class SessionManager:
     ) -> ChangeRecord:
         """Modify design rules in the board setup section.
 
+        Only keys that KiCad 9 accepts in the (setup ...) section are
+        allowed: pad_to_mask_clearance, solder_mask_min_width,
+        pad_to_paste_clearance, pad_to_paste_clearance_ratio.
+
+        Rules like min_track_width, min_via_diameter, etc. belong in the
+        .kicad_dru (design rules) file and are rejected with a clear error.
+
         Args:
             session: Active session.
             rules: Dict of rule name to value, e.g.:
-                {"min_clearance": 0.2, "min_track_width": 0.15, "min_via_diameter": 0.6}
-                Supported keys map to KiCad setup section entries.
+                {"pad_to_mask_clearance": 0.1, "solder_mask_min_width": 0.05}
         """
         self._require_active(session)
         assert session._working_doc is not None
@@ -1224,20 +1310,28 @@ class SessionManager:
         if setup_node is None:
             raise ValueError("Board has no setup section")
 
+        # Validate all keys before modifying anything.
+        resolved: list[tuple[str, float]] = []
+        for rule_name, value in rules.items():
+            sexp_name = self._RULE_ALIASES.get(rule_name, rule_name)
+            if sexp_name in self._DRU_ONLY_RULES:
+                raise ValueError(
+                    f"'{rule_name}' cannot be set in the board setup section. "
+                    f"In KiCad 9 this rule belongs in the .kicad_dru "
+                    f"(design rules) file. Valid setup keys: "
+                    f"{sorted(self._VALID_SETUP_RULES)}"
+                )
+            if sexp_name not in self._VALID_SETUP_RULES:
+                raise ValueError(
+                    f"Unknown design rule '{rule_name}'. "
+                    f"Valid setup keys: {sorted(self._VALID_SETUP_RULES)}. "
+                    f"Aliases: {sorted(self._RULE_ALIASES.keys())}"
+                )
+            resolved.append((sexp_name, value))
+
         before = setup_node.to_string()
 
-        _rule_mappings = {
-            "min_clearance": "pad_to_mask_clearance",
-            "min_track_width": "min_track_width",
-            "min_via_diameter": "min_via_diameter",
-            "min_via_drill": "min_via_drill",
-            "min_microvia_diameter": "min_microvia_diameter",
-            "min_microvia_drill": "min_microvia_drill",
-            "pad_to_mask_clearance": "pad_to_mask_clearance",
-        }
-
-        for rule_name, value in rules.items():
-            sexp_name = _rule_mappings.get(rule_name, rule_name)
+        for sexp_name, value in resolved:
             existing = setup_node.get(sexp_name)
             if existing is not None and existing.children:
                 existing.children[0] = _make_atom(str(value))
@@ -1356,8 +1450,55 @@ class SessionManager:
         # Remove old footprint
         session._working_doc.root.children.remove(fp_node)
 
-        # Build and insert new one at same position
-        new_fp = self._build_footprint_node(new_library, reference, new_value, x, y, layer)
+        # Try to resolve the full footprint from installed KiCad libraries
+        mod_path = self._resolve_kicad_mod_path(new_library)
+        if mod_path is not None:
+            from pathlib import Path
+
+            raw = Path(mod_path).read_text(encoding="utf-8")
+            new_fp = sexp_parse(raw)
+
+            # Update position
+            at_node = new_fp.get("at")
+            if at_node is None:
+                at_node = _make_node("at", [_make_atom(str(x)), _make_atom(str(y))])
+                new_fp.children.insert(0, at_node)
+            else:
+                at_node.children = [_make_atom(str(x)), _make_atom(str(y))]
+
+            # Update layer
+            layer_nd = new_fp.get("layer")
+            if layer_nd and layer_nd.children:
+                layer_nd.children[0] = _make_quoted(layer)
+
+            # Update Reference property
+            for prop in new_fp.find_all("property"):
+                if prop.first_value == "Reference":
+                    atom_idx = 0
+                    for i, child in enumerate(prop.children):
+                        if child.is_atom:
+                            atom_idx += 1
+                            if atom_idx == 2:
+                                prop.children[i] = _make_quoted(reference)
+                                break
+                elif prop.first_value == "Value":
+                    atom_idx = 0
+                    for i, child in enumerate(prop.children):
+                        if child.is_atom:
+                            atom_idx += 1
+                            if atom_idx == 2:
+                                prop.children[i] = _make_quoted(new_value)
+                                break
+
+            # Generate a fresh UUID
+            uuid_node = new_fp.get("uuid")
+            new_uuid = str(uuid.uuid4())
+            if uuid_node and uuid_node.children:
+                uuid_node.children[0] = _make_quoted(new_uuid)
+        else:
+            # Fallback: skeleton footprint
+            new_fp = self._build_footprint_node(new_library, reference, new_value, x, y, layer)
+
         session._working_doc.root.children.append(new_fp)
 
         after = new_fp.to_string()
@@ -1481,17 +1622,13 @@ class SessionManager:
                 if existing and existing.children:
                     existing.children[0] = _make_atom(str(min_width))
                 else:
-                    constraint_node.children.append(
-                        sexp_parse(f"(min_width {min_width})")
-                    )
+                    constraint_node.children.append(sexp_parse(f"(min_width {min_width})"))
             if min_clearance is not None:
                 existing = constraint_node.get("min_clearance")
                 if existing and existing.children:
                     existing.children[0] = _make_atom(str(min_clearance))
                 else:
-                    constraint_node.children.append(
-                        sexp_parse(f"(min_clearance {min_clearance})")
-                    )
+                    constraint_node.children.append(sexp_parse(f"(min_clearance {min_clearance})"))
 
         after = setup_node.to_string()
 
@@ -1678,9 +1815,7 @@ class SessionManager:
             if fp_node is not None:
                 session._working_doc.root.children.remove(fp_node)
             if record.before_snapshot:
-                session._working_doc.root.children.append(
-                    sexp_parse(record.before_snapshot)
-                )
+                session._working_doc.root.children.append(sexp_parse(record.before_snapshot))
 
         elif record.operation == "add_net_class":
             # Remove the added net class node

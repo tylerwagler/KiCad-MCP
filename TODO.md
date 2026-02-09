@@ -1,9 +1,10 @@
 # KiCad MCP — TODO
 
 ## Current State
-- 75 tools, 315 tests, 100% pass, 12 categories
+- 75 tools, 360 tests, 100% pass, 12 categories
 - Full feature parity with old Node.js server (which had 78% pass rate)
 - Best-in-class among 6 competing KiCad MCP repos
+- CI pipeline (GitHub Actions), integration tests, performance benchmarks
 
 ---
 
@@ -81,8 +82,8 @@
 
 ## Tech Debt / Quality
 
-- [ ] Update CLAUDE.md competitive table — all patterns now implemented, remove "Planned" status
+- [x] Update CLAUDE.md competitive table — all patterns now implemented, remove "Planned" status
 - [ ] Add type stubs for `pcbnew` module (for IDE support when available)
-- [ ] Integration tests for new session manager methods (currently unit-tested only)
-- [ ] Performance benchmarks for large boards (100+ component S-expr parsing)
-- [ ] CI pipeline (GitHub Actions: pytest + ruff + mypy)
+- [x] Integration tests for new session manager methods (12 tests covering full commit/rollback workflows)
+- [x] Performance benchmarks for large boards (24 tests, up to 500 components)
+- [x] CI pipeline (GitHub Actions: pytest + ruff + mypy on Python 3.11-3.13, Ubuntu + Windows)

@@ -100,6 +100,21 @@ class TestCreateProject:
             assert layers is not None
             assert len(layers.children) > 0
 
+    def test_create_project_pcb_no_toplevel_uuid(self) -> None:
+        """KiCad 9 PCB files must not have a top-level (uuid ...) token."""
+        from kicad_mcp.tools import TOOL_REGISTRY
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            TOOL_REGISTRY["create_project"].handler(
+                name="my_board",
+                directory=tmpdir,
+            )
+            pcb_path = Path(tmpdir) / "my_board.kicad_pcb"
+            doc = Document.load(str(pcb_path))
+            # uuid must not be a direct child of kicad_pcb
+            top_uuid = doc.root.get("uuid")
+            assert top_uuid is None, "PCB must not have top-level (uuid ...)"
+
     def test_create_project_pcb_has_setup(self) -> None:
         from kicad_mcp.tools import TOOL_REGISTRY
 

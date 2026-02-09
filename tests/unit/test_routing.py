@@ -247,9 +247,7 @@ class TestRoutingToolHandlers:
         start = TOOL_REGISTRY["start_session"].handler()
         sid = start["session_id"]
 
-        result = TOOL_REGISTRY["add_via"].handler(
-            session_id=sid, x=15, y=10, net_number=1
-        )
+        result = TOOL_REGISTRY["add_via"].handler(session_id=sid, x=15, y=10, net_number=1)
         assert result["status"] == "added"
 
     def test_delete_trace_tool(self) -> None:
@@ -281,9 +279,7 @@ class TestRoutingToolHandlers:
             # Need a fresh session since the one above already has the doc
             start2 = TOOL_REGISTRY["start_session"].handler()
             sid2 = start2["session_id"]
-            result = TOOL_REGISTRY["delete_trace"].handler(
-                session_id=sid2, segment_uuid=seg_uuid
-            )
+            result = TOOL_REGISTRY["delete_trace"].handler(session_id=sid2, segment_uuid=seg_uuid)
             assert result["status"] == "deleted"
 
     def test_get_ratsnest_tool(self) -> None:

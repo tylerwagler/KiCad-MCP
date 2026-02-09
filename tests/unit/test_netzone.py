@@ -207,9 +207,7 @@ class TestCreateZone:
     def test_zone_nonexistent_net_fails(self) -> None:
         mgr, session = self._make_session()
         with pytest.raises(ValueError, match="not found"):
-            mgr.apply_create_zone(
-                session, "FAKE_NET", "F.Cu", [(0, 0), (10, 0), (10, 10)]
-            )
+            mgr.apply_create_zone(session, "FAKE_NET", "F.Cu", [(0, 0), (10, 0), (10, 10)])
 
     def test_zone_undo(self) -> None:
         mgr, session = self._make_session()

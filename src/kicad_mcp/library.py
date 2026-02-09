@@ -160,12 +160,8 @@ def list_symbols_in_library(lib_path: str | Path) -> list[SymbolInfo]:
 
 
 # Regex patterns for fast symbol scanning
-_RE_TOP_SYMBOL = re.compile(
-    r'^\t\(symbol\s+"([^"]+)"', re.MULTILINE
-)
-_RE_PROPERTY = re.compile(
-    r'\(property\s+"([^"]+)"\s+"([^"]*)"'
-)
+_RE_TOP_SYMBOL = re.compile(r'^\t\(symbol\s+"([^"]+)"', re.MULTILINE)
+_RE_PROPERTY = re.compile(r'\(property\s+"([^"]+)"\s+"([^"]*)"')
 _RE_POWER = re.compile(r"\(power\)")
 _RE_PIN = re.compile(r"\(pin\s+\w+\s+\w+")
 

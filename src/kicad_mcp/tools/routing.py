@@ -80,9 +80,7 @@ def _add_via_handler(
     mgr = _get_mgr()
     try:
         session = mgr.get_session(session_id)
-        record = mgr.apply_add_via(
-            session, x, y, net_number, size, drill, (start_layer, end_layer)
-        )
+        record = mgr.apply_add_via(session, x, y, net_number, size, drill, (start_layer, end_layer))
         via_uuid = record.target.split(":", 1)[1] if ":" in record.target else ""
         result = record.to_dict()
         result["uuid"] = via_uuid

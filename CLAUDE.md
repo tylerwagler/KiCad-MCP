@@ -33,10 +33,10 @@ uv run mypy src/
 
 ### Two-Tier Tool System (Tool Router Pattern)
 
-The server exposes 50+ tools but **does NOT register them all directly with MCP**. Instead:
+The server exposes 75 tools but **does NOT register them all directly with MCP**. Instead:
 
-- **Direct tools** (~15): Always visible to the LLM — `create_project`, `open_project`, `place_component`, `route_trace`, etc.
-- **Routed tools** (~40+): Discoverable via 4 meta-tools: `list_tool_categories`, `get_category_tools`, `execute_tool`, `search_tools`
+- **Direct tools** (8): Always visible to the LLM — `open_project`, `get_board_info`, `list_components`, `find_component`, `start_session`, `commit_session`, `list_libraries`, `run_drc`
+- **Routed tools** (67): Discoverable via 4 meta-tools: `list_tool_categories`, `get_category_tools`, `execute_tool`, `search_tools`
 
 This reduces LLM context usage by ~70%. All tools are registered in a **single unified registry** (`tools/registry.py`) with `ToolSpec` dataclasses. The `direct=True` flag controls which tier a tool lives in.
 
@@ -109,14 +109,14 @@ This project synthesizes the best patterns from 6 existing KiCad MCP servers:
 
 | Pattern | Source | Status |
 |---|---|---|
-| Tool router (context reduction) | mixelpixx/KiCAD-MCP-Server | Core architecture |
-| Unified tool registry | rjwalters/kicad-tools | Core architecture |
-| Session/undo for mutations | rjwalters/kicad-tools | Planned |
-| S-expr parser (no KiCad dep) | rjwalters/kicad-tools | Planned |
-| Resources/Tools/Prompts split | lamaalrajih/kicad-mcp | Core architecture |
-| Manufacturer DRC presets | rjwalters/kicad-tools | Planned |
+| Tool router (context reduction) | mixelpixx/KiCAD-MCP-Server | Implemented |
+| Unified tool registry | rjwalters/kicad-tools | Implemented |
+| Session/undo for mutations | rjwalters/kicad-tools | Implemented |
+| S-expr parser (no KiCad dep) | rjwalters/kicad-tools | Implemented |
+| Resources/Tools/Prompts split | lamaalrajih/kicad-mcp | Implemented |
+| Manufacturer DRC presets | rjwalters/kicad-tools | Implemented |
 | JLCPCB parts catalog | mixelpixx/KiCAD-MCP-Server | Planned |
-| Input validation/security | lamaalrajih/kicad-mcp | Planned |
+| Input validation/security | lamaalrajih/kicad-mcp | Implemented |
 
 ## KiCad-Specific Notes
 

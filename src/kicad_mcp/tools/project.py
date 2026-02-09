@@ -30,12 +30,11 @@ def _minimal_kicad_pcb(
     height: float | None = None,
 ) -> str:
     """Generate a minimal .kicad_pcb S-expression."""
-    board_uuid = str(uuid.uuid4())
     lines = [
         '(kicad_pcb (version 20241229) (generator "kicad_mcp") (generator_version "9.0")',
-        '  (general (thickness 1.6) (legacy_teardrops no))',
+        "  (general (thickness 1.6) (legacy_teardrops no))",
         '  (paper "A4")',
-        '  (layers',
+        "  (layers",
         '    (0 "F.Cu" signal)',
         '    (31 "B.Cu" signal)',
         '    (32 "B.Adhes" user "B.Adhesive")',
@@ -65,7 +64,6 @@ def _minimal_kicad_pcb(
         " (plot_on_all_layers_selection 0x0000000_00000000))",
         "  )",
         '  (net 0 "")',
-        f'  (uuid "{board_uuid}")',
     ]
 
     if width is not None and height is not None:
@@ -77,8 +75,8 @@ def _minimal_kicad_pcb(
         ]:
             line_uuid = str(uuid.uuid4())
             lines.append(
-                f'  (gr_line (start {x1} {y1}) (end {x2} {y2})'
-                f' (stroke (width 0.05) (type default))'
+                f"  (gr_line (start {x1} {y1}) (end {x2} {y2})"
+                f" (stroke (width 0.05) (type default))"
                 f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
             )
 

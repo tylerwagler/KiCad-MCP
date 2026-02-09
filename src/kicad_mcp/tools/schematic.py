@@ -103,9 +103,8 @@ def _add_symbol_handler(
     pin1_uuid = str(_uuid.uuid4())
     pin2_uuid = str(_uuid.uuid4())
 
-    angle_str = f" {angle}" if angle != 0 else ""
     sym_text = (
-        f'(symbol (lib_id "{lib_id}") (at {x} {y}{angle_str}) (unit {unit})'
+        f'(symbol (lib_id "{lib_id}") (at {x} {y} {angle}) (unit {unit})'
         f" (in_bom yes) (on_board yes)"
         f' (uuid "{sym_uuid}")'
         f' (property "Reference" "{reference}" (at {x} {y - 2.54} 0)'
@@ -161,7 +160,7 @@ def _add_wire_handler(
     wire_uuid = str(_uuid.uuid4())
     wire_text = (
         f"(wire (pts (xy {start_x} {start_y}) (xy {end_x} {end_y}))"
-        f' (stroke (width 0) (type default))'
+        f" (stroke (width 0) (type default))"
         f' (uuid "{wire_uuid}"))'
     )
     wire_node = sexp_parse(wire_text)
@@ -202,9 +201,8 @@ def _add_label_handler(
     doc = schematic_state.get_document()
 
     label_uuid = str(_uuid.uuid4())
-    angle_str = f" {angle}" if angle != 0 else ""
     label_text = (
-        f'(label "{name}" (at {x} {y}{angle_str})'
+        f'(label "{name}" (at {x} {y} {angle})'
         f" (effects (font (size 1.27 1.27)) (justify left))"
         f' (uuid "{label_uuid}"))'
     )
@@ -472,12 +470,8 @@ def _generate_netlist_handler(
         f'    (source "{doc.path}")\n'
         f'    (tool "kicad_mcp")\n'
         f"  )\n"
-        f"  (components\n"
-        + "\n".join(components)
-        + "\n  )\n"
-        "  (nets\n"
-        + "\n".join(nets)
-        + "\n  )\n"
+        f"  (components\n" + "\n".join(components) + "\n  )\n"
+        "  (nets\n" + "\n".join(nets) + "\n  )\n"
         ")"
     )
 

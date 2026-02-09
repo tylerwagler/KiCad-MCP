@@ -2,7 +2,7 @@
 
 AI-assisted PCB design through the [Model Context Protocol](https://modelcontextprotocol.io). Analyze, modify, route, verify, and export KiCad boards — all from your AI assistant.
 
-**75 tools** | **315 tests, 100% pass** | **Pure Python, zero KiCad dependency for reads**
+**75 tools** | **360 tests, 100% pass** | **Pure Python, zero KiCad dependency for reads**
 
 ## What It Does
 

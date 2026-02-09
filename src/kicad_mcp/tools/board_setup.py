@@ -17,17 +17,24 @@ def _get_mgr():
 
 
 def _get_design_rules_handler() -> dict[str, Any]:
-    """Get the current design rules from the board setup section."""
+    """Get the current design rules from the board setup section.
+
+    Returns only the design-rule keys valid in KiCad 9's setup section:
+    pad_to_mask_clearance, solder_mask_min_width, pad_to_paste_clearance,
+    pad_to_paste_clearance_ratio.
+    """
     from .. import state
+    from ..session.manager import SessionManager
 
     doc = state.get_document()
     setup_node = doc.root.get("setup")
     if setup_node is None:
         return {"error": "Board has no setup section"}
 
+    valid_keys = SessionManager._VALID_SETUP_RULES
     rules: dict[str, Any] = {}
     for child in setup_node.children:
-        if child.name and child.atom_values:
+        if child.name in valid_keys and child.atom_values:
             rules[child.name] = child.atom_values[0]
     return {"rules": rules}
 
@@ -38,9 +45,14 @@ def _set_design_rules_handler(
 ) -> dict[str, Any]:
     """Set design rules in the board setup section.
 
+    Only rules valid in KiCad 9's (setup ...) section are accepted:
+    pad_to_mask_clearance, solder_mask_min_width, pad_to_paste_clearance,
+    pad_to_paste_clearance_ratio. Rules like min_track_width belong in
+    the .kicad_dru file and will be rejected.
+
     Args:
         session_id: Active session ID.
-        rules: Dict of rule name to value (e.g., {"min_track_width": 0.15}).
+        rules: Dict of rule name to value (e.g., {"pad_to_mask_clearance": 0.1}).
     """
     mgr = _get_mgr()
     try:
@@ -187,12 +199,21 @@ register_tool(
 
 register_tool(
     name="set_design_rules",
-    description="Set design rules (clearance, track width, via size, etc.).",
+    description=(
+        "Set design rules in the board setup section. "
+        "Valid keys: pad_to_mask_clearance, solder_mask_min_width, "
+        "pad_to_paste_clearance, pad_to_paste_clearance_ratio. "
+        "Rules like min_track_width belong in the .kicad_dru file "
+        "and are NOT accepted here."
+    ),
     parameters={
         "session_id": {"type": "string", "description": "Active session ID."},
         "rules": {
             "type": "object",
-            "description": "Dict of rule name to value (e.g., {'min_track_width': 0.15}).",
+            "description": (
+                "Dict of rule name to value, e.g. "
+                "{'pad_to_mask_clearance': 0.1, 'solder_mask_min_width': 0.05}."
+            ),
         },
     },
     handler=_set_design_rules_handler,
