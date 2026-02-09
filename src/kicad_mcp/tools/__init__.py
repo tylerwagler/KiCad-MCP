@@ -3,6 +3,7 @@
 # Import modules to trigger tool registration via register_tool() calls
 from . import (  # noqa: F401
     analysis,
+    board_setup,
     direct,
     drc,
     export,
@@ -11,6 +12,7 @@ from . import (  # noqa: F401
     mutation,
     netzone,
     placement,
+    project,
     routing,
     schematic,
 )

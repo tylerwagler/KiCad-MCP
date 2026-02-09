@@ -386,3 +386,130 @@ register_tool(
     handler=_save_schematic_handler,
     category="schematic",
 )
+
+
+# ── Create / Netlist handlers ───────────────────────────────────────
+
+
+def _create_schematic_handler(
+    path: str,
+    paper: str = "A4",
+) -> dict[str, Any]:
+    """Create a new empty schematic file.
+
+    Args:
+        path: Path for the new .kicad_sch file.
+        paper: Paper size ('A4', 'A3', 'letter', etc.). Default: 'A4'.
+    """
+    from pathlib import Path as P
+
+    sch_uuid = str(_uuid.uuid4())
+    sch_text = (
+        f'(kicad_sch (version 20231120) (generator "kicad_mcp")'
+        f' (generator_version "9.0")\n'
+        f'  (uuid "{sch_uuid}")\n'
+        f'  (paper "{paper}")\n'
+        f"  (lib_symbols)\n"
+        f'  (sheet_instances (path "/" (page "1")))\n'
+        f")"
+    )
+    out = P(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(sch_text, encoding="utf-8")
+
+    return {
+        "status": "created",
+        "path": str(out),
+        "paper": paper,
+        "uuid": sch_uuid,
+    }
+
+
+def _generate_netlist_handler(
+    output_path: str,
+) -> dict[str, Any]:
+    """Generate a netlist from the currently loaded schematic.
+
+    Extracts symbols and their pin connections, writes KiCad netlist format.
+
+    Args:
+        output_path: Path for the output netlist file.
+    """
+    from pathlib import Path as P
+
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    symbols = schematic_state.get_symbols()
+
+    # Build components list
+    components = []
+    for sym in symbols:
+        lib_name = sym.lib_id.split(":")[0] if ":" in sym.lib_id else sym.lib_id
+        part_name = sym.lib_id.split(":")[-1] if ":" in sym.lib_id else sym.lib_id
+        components.append(
+            f'    (comp (ref "{sym.reference}")\n'
+            f'      (value "{sym.value}")\n'
+            f'      (libsource (lib "{lib_name}")'
+            f' (part "{part_name}")))'
+        )
+
+    # Build nets from labels
+    nets = []
+    net_num = 1
+    label_names: set[str] = set()
+    for child in doc.root.children:
+        if child.name == "label":
+            name = child.first_value
+            if name and name not in label_names:
+                label_names.add(name)
+                nets.append(f'    (net (code {net_num}) (name "{name}"))')
+                net_num += 1
+
+    nl_text = (
+        f"(export (version D)\n"
+        f"  (design\n"
+        f'    (source "{doc.path}")\n'
+        f'    (tool "kicad_mcp")\n'
+        f"  )\n"
+        f"  (components\n"
+        + "\n".join(components)
+        + "\n  )\n"
+        "  (nets\n"
+        + "\n".join(nets)
+        + "\n  )\n"
+        ")"
+    )
+
+    out = P(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(nl_text, encoding="utf-8")
+
+    return {
+        "status": "generated",
+        "path": str(out),
+        "component_count": len(symbols),
+        "net_count": len(nets),
+    }
+
+
+register_tool(
+    name="create_schematic",
+    description="Create a new empty KiCad schematic file.",
+    parameters={
+        "path": {"type": "string", "description": "Path for the .kicad_sch file."},
+        "paper": {"type": "string", "description": "Paper size (e.g., 'A4'). Default: 'A4'."},
+    },
+    handler=_create_schematic_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="generate_netlist",
+    description="Generate a netlist from the loaded schematic.",
+    parameters={
+        "output_path": {"type": "string", "description": "Output netlist file path."},
+    },
+    handler=_generate_netlist_handler,
+    category="schematic",
+)

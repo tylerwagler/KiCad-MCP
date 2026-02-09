@@ -415,6 +415,45 @@ class KiCadCli:
             message="STEP file exported successfully",
         )
 
+    def export_vrml(
+        self,
+        board_path: str,
+        output_path: str,
+    ) -> ExportResult:
+        """Export board as VRML 3D model.
+
+        Args:
+            board_path: Path to .kicad_pcb file.
+            output_path: Path for the output VRML file.
+        """
+        if not Path(board_path).exists():
+            raise FileNotFoundError(f"Board not found: {board_path}")
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        args = [
+            "pcb",
+            "export",
+            "vrml",
+            "--output",
+            output_path,
+            board_path,
+        ]
+
+        result = self._run(args)
+        if result.returncode != 0:
+            return ExportResult(
+                success=False,
+                output_path=output_path,
+                message=result.stderr.strip() or "VRML export failed",
+            )
+
+        return ExportResult(
+            success=True,
+            output_path=output_path,
+            message="VRML file exported successfully",
+        )
+
     def export_pos(
         self,
         board_path: str,

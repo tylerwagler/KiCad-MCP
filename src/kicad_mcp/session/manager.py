@@ -1001,6 +1001,512 @@ class SessionManager:
 
         return unrouted
 
+    # ── Board Setup ─────────────────────────────────────────────────
+
+    def apply_set_board_size(
+        self,
+        session: Session,
+        width: float,
+        height: float,
+    ) -> ChangeRecord:
+        """Set the board size by creating/replacing Edge.Cuts outline as a rectangle.
+
+        Args:
+            session: Active session.
+            width: Board width in mm.
+            height: Board height in mm.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        # Remove existing Edge.Cuts gr_line/gr_rect nodes
+        before_lines = []
+        to_remove = []
+        for child in session._working_doc.root.children:
+            if child.name in ("gr_line", "gr_rect"):
+                layer_node = child.get("layer")
+                if layer_node and layer_node.first_value == "Edge.Cuts":
+                    before_lines.append(child.to_string())
+                    to_remove.append(child)
+        for node in to_remove:
+            session._working_doc.root.children.remove(node)
+
+        # Create 4 gr_line segments forming a rectangle at origin
+        lines = [
+            (0, 0, width, 0),
+            (width, 0, width, height),
+            (width, height, 0, height),
+            (0, height, 0, 0),
+        ]
+        after_lines = []
+        for x1, y1, x2, y2 in lines:
+            line_uuid = str(uuid.uuid4())
+            line_text = (
+                f'(gr_line (start {x1} {y1}) (end {x2} {y2})'
+                f' (stroke (width 0.05) (type default))'
+                f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
+            )
+            line_node = sexp_parse(line_text)
+            session._working_doc.root.children.append(line_node)
+            after_lines.append(line_node.to_string())
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="set_board_size",
+            description=f"Set board size to {width}x{height}mm",
+            target="Edge.Cuts",
+            before_snapshot="\n".join(before_lines),
+            after_snapshot="\n".join(after_lines),
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    def apply_add_board_outline(
+        self,
+        session: Session,
+        points: list[tuple[float, float]],
+    ) -> ChangeRecord:
+        """Add board outline segments on Edge.Cuts layer.
+
+        Args:
+            session: Active session.
+            points: List of (x, y) tuples. Lines are drawn between consecutive
+                    points, and the last point is connected back to the first.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        if len(points) < 3:
+            raise ValueError("Board outline requires at least 3 points")
+
+        after_lines = []
+        for i in range(len(points)):
+            x1, y1 = points[i]
+            x2, y2 = points[(i + 1) % len(points)]
+            line_uuid = str(uuid.uuid4())
+            line_text = (
+                f'(gr_line (start {x1} {y1}) (end {x2} {y2})'
+                f' (stroke (width 0.05) (type default))'
+                f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
+            )
+            line_node = sexp_parse(line_text)
+            session._working_doc.root.children.append(line_node)
+            after_lines.append(line_node.to_string())
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="add_board_outline",
+            description=f"Add board outline with {len(points)} points",
+            target="Edge.Cuts",
+            before_snapshot="",
+            after_snapshot="\n".join(after_lines),
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    def apply_add_mounting_hole(
+        self,
+        session: Session,
+        x: float,
+        y: float,
+        drill: float = 3.2,
+        pad_dia: float = 6.0,
+    ) -> ChangeRecord:
+        """Insert a mounting hole footprint at the given position.
+
+        Args:
+            session: Active session.
+            x: X position in mm.
+            y: Y position in mm.
+            drill: Drill diameter in mm.
+            pad_dia: Pad diameter in mm.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        hole_uuid = str(uuid.uuid4())
+        ref_uuid = str(uuid.uuid4())
+        val_uuid = str(uuid.uuid4())
+        fp_text = (
+            f'(footprint "MountingHole:MountingHole_{drill}mm"'
+            f' (layer "F.Cu") (uuid "{hole_uuid}") (at {x} {y})'
+            f' (property "Reference" "H1"'
+            f' (at 0 -{pad_dia / 2 + 1} 0) (layer "F.SilkS") (uuid "{ref_uuid}")'
+            f' (effects (font (size 1 1) (thickness 0.15))))'
+            f' (property "Value" "MountingHole"'
+            f' (at 0 {pad_dia / 2 + 1} 0) (layer "F.Fab") (uuid "{val_uuid}")'
+            f' (effects (font (size 1 1) (thickness 0.15))))'
+            f' (pad "" np_thru_hole circle (at 0 0)'
+            f" (size {pad_dia} {pad_dia}) (drill {drill})"
+            f' (layers "*.Cu" "*.Mask")))'
+        )
+        fp_node = sexp_parse(fp_text)
+        session._working_doc.root.children.append(fp_node)
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="add_mounting_hole",
+            description=f"Add mounting hole at ({x}, {y}) drill={drill}mm",
+            target=f"mounting_hole:{hole_uuid[:8]}",
+            before_snapshot="",
+            after_snapshot=fp_node.to_string(),
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    def apply_add_board_text(
+        self,
+        session: Session,
+        text: str,
+        x: float,
+        y: float,
+        layer: str = "F.SilkS",
+        size: float = 1.0,
+        angle: float = 0,
+    ) -> ChangeRecord:
+        """Add a text element to the board.
+
+        Args:
+            session: Active session.
+            text: The text string to add.
+            x: X position in mm.
+            y: Y position in mm.
+            layer: Target layer. Defaults to "F.SilkS".
+            size: Text height in mm. Defaults to 1.0.
+            angle: Rotation angle in degrees. Defaults to 0.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        text_uuid = str(uuid.uuid4())
+        angle_str = f" {angle}" if angle != 0 else ""
+        thickness = size * 0.15
+        text_sexp = (
+            f'(gr_text "{text}" (at {x} {y}{angle_str})'
+            f' (layer "{layer}") (uuid "{text_uuid}")'
+            f" (effects (font (size {size} {size}) (thickness {thickness}))))"
+        )
+        text_node = sexp_parse(text_sexp)
+        session._working_doc.root.children.append(text_node)
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="add_board_text",
+            description=f"Add text '{text}' at ({x}, {y}) on {layer}",
+            target=f"text:{text_uuid[:8]}",
+            before_snapshot="",
+            after_snapshot=text_node.to_string(),
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    def apply_set_design_rules(
+        self,
+        session: Session,
+        rules: dict[str, float],
+    ) -> ChangeRecord:
+        """Modify design rules in the board setup section.
+
+        Args:
+            session: Active session.
+            rules: Dict of rule name to value, e.g.:
+                {"min_clearance": 0.2, "min_track_width": 0.15, "min_via_diameter": 0.6}
+                Supported keys map to KiCad setup section entries.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        setup_node = session._working_doc.root.get("setup")
+        if setup_node is None:
+            raise ValueError("Board has no setup section")
+
+        before = setup_node.to_string()
+
+        _rule_mappings = {
+            "min_clearance": "pad_to_mask_clearance",
+            "min_track_width": "min_track_width",
+            "min_via_diameter": "min_via_diameter",
+            "min_via_drill": "min_via_drill",
+            "min_microvia_diameter": "min_microvia_diameter",
+            "min_microvia_drill": "min_microvia_drill",
+            "pad_to_mask_clearance": "pad_to_mask_clearance",
+        }
+
+        for rule_name, value in rules.items():
+            sexp_name = _rule_mappings.get(rule_name, rule_name)
+            existing = setup_node.get(sexp_name)
+            if existing is not None and existing.children:
+                existing.children[0] = _make_atom(str(value))
+            else:
+                new_node = sexp_parse(f"({sexp_name} {value})")
+                setup_node.children.append(new_node)
+
+        after = setup_node.to_string()
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="set_design_rules",
+            description=f"Set design rules: {list(rules.keys())}",
+            target="setup",
+            before_snapshot=before,
+            after_snapshot=after,
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    # ── Component Edit/Replace ───────────────────────────────────────
+
+    def apply_edit_component(
+        self,
+        session: Session,
+        reference: str,
+        properties: dict[str, str],
+    ) -> ChangeRecord:
+        """Update property values on an existing footprint.
+
+        Args:
+            session: Active session.
+            reference: Component reference designator.
+            properties: Dict of property name to new value, e.g.
+                        {"Value": "22k", "Footprint": "Resistor_SMD:R_0805"}.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        fp_node = self._find_footprint(session._working_doc, reference)
+        if fp_node is None:
+            raise ValueError(f"Component {reference!r} not found")
+
+        before = fp_node.to_string()
+
+        for prop_name, prop_value in properties.items():
+            found = False
+            for prop in fp_node.find_all("property"):
+                if prop.first_value == prop_name:
+                    # Replace the second atom child (the value)
+                    atom_idx = 0
+                    for i, child in enumerate(prop.children):
+                        if child.is_atom:
+                            atom_idx += 1
+                            if atom_idx == 2:
+                                prop.children[i] = _make_quoted(prop_value)
+                                found = True
+                                break
+                    break
+            if not found:
+                # Add new property
+                prop_uuid = str(uuid.uuid4())
+                prop_text = (
+                    f'(property "{prop_name}" "{prop_value}"'
+                    f' (at 0 0 0) (layer "F.Fab") (uuid "{prop_uuid}")'
+                    f" (effects (font (size 1 1) (thickness 0.15)) hide))"
+                )
+                fp_node.children.append(sexp_parse(prop_text))
+
+        after = fp_node.to_string()
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="edit_component",
+            description=f"Edit {reference} properties: {list(properties.keys())}",
+            target=reference,
+            before_snapshot=before,
+            after_snapshot=after,
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    def apply_replace_component(
+        self,
+        session: Session,
+        reference: str,
+        new_library: str,
+        new_value: str,
+    ) -> ChangeRecord:
+        """Replace a component with a different footprint, keeping position.
+
+        Args:
+            session: Active session.
+            reference: Reference designator of component to replace.
+            new_library: New library:footprint identifier.
+            new_value: New component value.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        fp_node = self._find_footprint(session._working_doc, reference)
+        if fp_node is None:
+            raise ValueError(f"Component {reference!r} not found")
+
+        # Preserve position and layer
+        at_node = fp_node.get("at")
+        x = float(at_node.atom_values[0]) if at_node and at_node.atom_values else 0
+        y = float(at_node.atom_values[1]) if at_node and len(at_node.atom_values) > 1 else 0
+        layer_node = fp_node.get("layer")
+        layer = layer_node.first_value if layer_node else "F.Cu"
+
+        before = fp_node.to_string()
+
+        # Remove old footprint
+        session._working_doc.root.children.remove(fp_node)
+
+        # Build and insert new one at same position
+        new_fp = self._build_footprint_node(new_library, reference, new_value, x, y, layer)
+        session._working_doc.root.children.append(new_fp)
+
+        after = new_fp.to_string()
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="replace_component",
+            description=f"Replace {reference} with {new_library} ({new_value})",
+            target=reference,
+            before_snapshot=before,
+            after_snapshot=after,
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    # ── Net class / layer constraints ────────────────────────────────
+
+    def apply_add_net_class(
+        self,
+        session: Session,
+        name: str,
+        clearance: float = 0.2,
+        trace_width: float = 0.25,
+        via_dia: float = 0.8,
+        via_drill: float = 0.4,
+        nets: list[str] | None = None,
+    ) -> ChangeRecord:
+        """Add a net class definition to the board.
+
+        Args:
+            session: Active session.
+            name: Net class name (e.g., "Power", "Signal").
+            clearance: Minimum clearance in mm.
+            trace_width: Default trace width in mm.
+            via_dia: Via diameter in mm.
+            via_drill: Via drill in mm.
+            nets: List of net names to assign to this class.
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        nets_str = ""
+        if nets:
+            nets_str = " ".join(f'(add_net "{n}")' for n in nets)
+            nets_str = " " + nets_str
+
+        nc_uuid = str(uuid.uuid4())
+        nc_text = (
+            f'(net_class "{name}" ""'
+            f" (clearance {clearance}) (trace_width {trace_width})"
+            f" (via_dia {via_dia}) (via_drill {via_drill})"
+            f' (uuid "{nc_uuid}"){nets_str})'
+        )
+        nc_node = sexp_parse(nc_text)
+
+        # Insert in setup section if it exists, otherwise at board root
+        setup_node = session._working_doc.root.get("setup")
+        if setup_node is not None:
+            setup_node.children.append(nc_node)
+        else:
+            session._working_doc.root.children.append(nc_node)
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="add_net_class",
+            description=f"Add net class '{name}'",
+            target=f"net_class:{name}",
+            before_snapshot="",
+            after_snapshot=nc_node.to_string(),
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
+    def apply_set_layer_constraints(
+        self,
+        session: Session,
+        layer: str,
+        min_width: float | None = None,
+        min_clearance: float | None = None,
+    ) -> ChangeRecord:
+        """Set per-layer constraints in the board setup.
+
+        Args:
+            session: Active session.
+            layer: Layer name (e.g., "F.Cu").
+            min_width: Minimum trace width on this layer (mm).
+            min_clearance: Minimum clearance on this layer (mm).
+        """
+        self._require_active(session)
+        assert session._working_doc is not None
+
+        setup_node = session._working_doc.root.get("setup")
+        if setup_node is None:
+            raise ValueError("Board has no setup section")
+
+        before = setup_node.to_string()
+
+        # Find or create layer_constraints for this layer
+        constraint_node = None
+        for child in setup_node.children:
+            if child.name == "layer_constraints":
+                layer_child = child.get("layer")
+                if layer_child and layer_child.first_value == layer:
+                    constraint_node = child
+                    break
+
+        if constraint_node is None:
+            parts = [f'(layer "{layer}")']
+            if min_width is not None:
+                parts.append(f"(min_width {min_width})")
+            if min_clearance is not None:
+                parts.append(f"(min_clearance {min_clearance})")
+            constraint_text = f"(layer_constraints {' '.join(parts)})"
+            constraint_node = sexp_parse(constraint_text)
+            setup_node.children.append(constraint_node)
+        else:
+            if min_width is not None:
+                existing = constraint_node.get("min_width")
+                if existing and existing.children:
+                    existing.children[0] = _make_atom(str(min_width))
+                else:
+                    constraint_node.children.append(
+                        sexp_parse(f"(min_width {min_width})")
+                    )
+            if min_clearance is not None:
+                existing = constraint_node.get("min_clearance")
+                if existing and existing.children:
+                    existing.children[0] = _make_atom(str(min_clearance))
+                else:
+                    constraint_node.children.append(
+                        sexp_parse(f"(min_clearance {min_clearance})")
+                    )
+
+        after = setup_node.to_string()
+
+        record = ChangeRecord(
+            change_id=str(uuid.uuid4())[:8],
+            operation="set_layer_constraints",
+            description=f"Set constraints for {layer}",
+            target=f"layer:{layer}",
+            before_snapshot=before,
+            after_snapshot=after,
+            applied=True,
+        )
+        session.changes.append(record)
+        return record
+
     # ── Undo ────────────────────────────────────────────────────────
 
     def undo(self, session: Session) -> ChangeRecord | None:
@@ -1109,6 +1615,98 @@ class SessionManager:
             if record.before_snapshot:
                 restored = sexp_parse(record.before_snapshot)
                 session._working_doc.root.children.append(restored)
+
+        elif record.operation == "set_board_size":
+            # Remove the new gr_lines and restore old ones
+            to_remove = []
+            for child in session._working_doc.root.children:
+                if child.name == "gr_line":
+                    layer_node = child.get("layer")
+                    if layer_node and layer_node.first_value == "Edge.Cuts":
+                        to_remove.append(child)
+            for node in to_remove:
+                session._working_doc.root.children.remove(node)
+            if record.before_snapshot:
+                for line_str in record.before_snapshot.split("\n"):
+                    if line_str.strip():
+                        session._working_doc.root.children.append(sexp_parse(line_str))
+
+        elif record.operation == "add_board_outline":
+            # Remove added outline segments by matching after_snapshot
+            for line_str in record.after_snapshot.split("\n"):
+                if line_str.strip():
+                    for i, child in enumerate(session._working_doc.root.children):
+                        if child.name == "gr_line" and child.to_string() == line_str:
+                            session._working_doc.root.children.pop(i)
+                            break
+
+        elif record.operation == "add_mounting_hole":
+            # Remove the added mounting hole footprint
+            after_str = record.after_snapshot
+            for i, child in enumerate(session._working_doc.root.children):
+                if child.name == "footprint" and child.to_string() == after_str:
+                    session._working_doc.root.children.pop(i)
+                    break
+
+        elif record.operation == "add_board_text":
+            # Remove the added text
+            after_str = record.after_snapshot
+            for i, child in enumerate(session._working_doc.root.children):
+                if child.name == "gr_text" and child.to_string() == after_str:
+                    session._working_doc.root.children.pop(i)
+                    break
+
+        elif record.operation == "set_design_rules":
+            # Restore setup section from before snapshot
+            setup_node = session._working_doc.root.get("setup")
+            if setup_node is not None and record.before_snapshot:
+                before_node = sexp_parse(record.before_snapshot)
+                idx = session._working_doc.root.children.index(setup_node)
+                session._working_doc.root.children[idx] = before_node
+
+        elif record.operation == "edit_component":
+            # Replace entire footprint with before snapshot
+            fp_node = self._find_footprint(session._working_doc, record.target)
+            if fp_node is not None and record.before_snapshot:
+                before_node = sexp_parse(record.before_snapshot)
+                idx = session._working_doc.root.children.index(fp_node)
+                session._working_doc.root.children[idx] = before_node
+
+        elif record.operation == "replace_component":
+            # Remove new footprint, restore old one
+            fp_node = self._find_footprint(session._working_doc, record.target)
+            if fp_node is not None:
+                session._working_doc.root.children.remove(fp_node)
+            if record.before_snapshot:
+                session._working_doc.root.children.append(
+                    sexp_parse(record.before_snapshot)
+                )
+
+        elif record.operation == "add_net_class":
+            # Remove the added net class node
+            after_str = record.after_snapshot
+            # Check setup section first
+            setup_node = session._working_doc.root.get("setup")
+            removed = False
+            if setup_node is not None:
+                for i, child in enumerate(setup_node.children):
+                    if child.name == "net_class" and child.to_string() == after_str:
+                        setup_node.children.pop(i)
+                        removed = True
+                        break
+            if not removed:
+                for i, child in enumerate(session._working_doc.root.children):
+                    if child.name == "net_class" and child.to_string() == after_str:
+                        session._working_doc.root.children.pop(i)
+                        break
+
+        elif record.operation == "set_layer_constraints":
+            # Restore setup section from before snapshot
+            setup_node = session._working_doc.root.get("setup")
+            if setup_node is not None and record.before_snapshot:
+                before_node = sexp_parse(record.before_snapshot)
+                idx = session._working_doc.root.children.index(setup_node)
+                session._working_doc.root.children[idx] = before_node
 
     # ── Commit / Rollback ───────────────────────────────────────────
 

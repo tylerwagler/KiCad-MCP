@@ -222,3 +222,36 @@ register_tool(
     handler=_export_bom_handler,
     category="export",
 )
+
+
+def _export_vrml_handler(output_path: str) -> dict[str, Any]:
+    """Export board as VRML 3D model.
+
+    Args:
+        output_path: Path for the output VRML file (.wrl).
+    """
+    from .. import state
+    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+
+    board_path = state.get_board_path()
+    if not board_path:
+        return {"error": "No board loaded. Use open_project first."}
+
+    try:
+        cli = KiCadCli()
+    except KiCadCliNotFound:
+        return {"error": "kicad-cli not found. Install KiCad 8+."}
+
+    result = cli.export_vrml(board_path, output_path)
+    return result.to_dict()
+
+
+register_tool(
+    name="export_vrml",
+    description="Export board as VRML 3D model (.wrl).",
+    parameters={
+        "output_path": {"type": "string", "description": "Output VRML file path."},
+    },
+    handler=_export_vrml_handler,
+    category="export",
+)

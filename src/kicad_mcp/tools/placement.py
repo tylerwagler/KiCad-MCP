@@ -240,3 +240,137 @@ register_tool(
     handler=_delete_component_handler,
     category="placement",
 )
+
+
+# ── Edit / Replace / Group handlers ────────────────────────────────
+
+
+def _edit_component_handler(
+    session_id: str,
+    reference: str,
+    properties: dict[str, str],
+) -> dict[str, Any]:
+    """Edit properties of an existing component.
+
+    Args:
+        session_id: Active session ID.
+        reference: Component reference designator (e.g., "R1").
+        properties: Dict of property name to new value (e.g., {"Value": "22k"}).
+    """
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+        record = mgr.apply_edit_component(session, reference, properties)
+        return {"status": "edited", "change": record.to_dict()}
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+def _replace_component_handler(
+    session_id: str,
+    reference: str,
+    new_library: str,
+    new_value: str,
+) -> dict[str, Any]:
+    """Replace a component with a different footprint, keeping its position.
+
+    Args:
+        session_id: Active session ID.
+        reference: Reference designator of the component to replace.
+        new_library: New library:footprint identifier.
+        new_value: New component value.
+    """
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+        record = mgr.apply_replace_component(session, reference, new_library, new_value)
+        return {"status": "replaced", "change": record.to_dict()}
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+def _group_components_handler(
+    session_id: str,
+    references: list[str],
+    group_name: str,
+) -> dict[str, Any]:
+    """Tag multiple components with a group label.
+
+    Args:
+        session_id: Active session ID.
+        references: List of reference designators to group.
+        group_name: Name for the group.
+    """
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+
+    grouped = []
+    for ref in references:
+        try:
+            mgr.apply_edit_component(
+                session, ref, {"Group": group_name}
+            )
+            grouped.append(ref)
+        except ValueError:
+            pass
+
+    return {
+        "status": "grouped",
+        "group_name": group_name,
+        "grouped_count": len(grouped),
+        "references": grouped,
+    }
+
+
+register_tool(
+    name="edit_component",
+    description="Edit properties of an existing component (Value, Footprint, etc.).",
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "reference": {"type": "string", "description": "Component reference (e.g., 'R1')."},
+        "properties": {
+            "type": "object",
+            "description": "Property name to new value dict (e.g., {'Value': '22k'}).",
+        },
+    },
+    handler=_edit_component_handler,
+    category="placement",
+)
+
+register_tool(
+    name="replace_component",
+    description="Replace a component with a different footprint, keeping position.",
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "reference": {"type": "string", "description": "Component reference (e.g., 'R1')."},
+        "new_library": {
+            "type": "string",
+            "description": "New Library:Footprint identifier.",
+        },
+        "new_value": {"type": "string", "description": "New component value."},
+    },
+    handler=_replace_component_handler,
+    category="placement",
+)
+
+register_tool(
+    name="group_components",
+    description="Tag multiple components with a group label.",
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "references": {
+            "type": "array",
+            "description": "List of reference designators to group.",
+        },
+        "group_name": {"type": "string", "description": "Group name."},
+    },
+    handler=_group_components_handler,
+    category="placement",
+)
