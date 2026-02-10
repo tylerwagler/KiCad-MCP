@@ -654,6 +654,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "httpx" },
 ]
 
 [package.optional-dependencies]
@@ -673,6 +674,7 @@ ipc = [
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=2.0" },
+    { name = "httpx", specifier = ">=0.25" },
     { name = "kicad-python", marker = "extra == 'all'", specifier = ">=0.5" },
     { name = "kicad-python", marker = "extra == 'ipc'", specifier = ">=0.5" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },

@@ -10,6 +10,7 @@ from . import (  # noqa: F401
     drc,
     export,
     ipc_sync,
+    jlcpcb,
     library,
     manufacturer,
     mutation,
