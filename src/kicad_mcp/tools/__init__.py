@@ -7,6 +7,7 @@ from . import (  # noqa: F401
     direct,
     drc,
     export,
+    ipc_sync,
     library,
     manufacturer,
     mutation,

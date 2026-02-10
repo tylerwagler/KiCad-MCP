@@ -10,12 +10,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ipc = ["kicad-python>=0.5"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.9",
     "mypy>=1.14",
 ]
+all = ["kicad-python>=0.5"]
 
 [project.scripts]
 kicad-mcp = "kicad_mcp.server:main"

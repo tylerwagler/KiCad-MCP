@@ -1846,7 +1846,12 @@ class SessionManager:
     # ── Commit / Rollback ───────────────────────────────────────────
 
     def commit(self, session: Session) -> dict[str, Any]:
-        """Commit all applied changes — write the modified board to disk."""
+        """Commit all applied changes — write the modified board to disk.
+
+        If the IPC backend is connected, changes are also pushed to KiCad
+        GUI for instant visual feedback. The file write always happens
+        regardless of IPC status (file is the source of truth).
+        """
         self._require_active(session)
         assert session._working_doc is not None
         assert session._original_doc is not None
@@ -1856,15 +1861,81 @@ class SessionManager:
             session.state = SessionState.COMMITTED
             return {"status": "committed", "changes_written": 0}
 
+        # Try IPC push for live UI feedback (additive, not replacing file write)
+        ipc_pushed = self._try_ipc_push(applied)
+
+        # Always write to disk as the source of truth
         session._working_doc.save()
         session._original_doc.root = session._working_doc.root
 
         session.state = SessionState.COMMITTED
-        return {
+        result: dict[str, Any] = {
             "status": "committed",
             "changes_written": len(applied),
             "board_path": session.board_path,
         }
+        if ipc_pushed > 0:
+            result["ipc_pushed"] = ipc_pushed
+        return result
+
+    @staticmethod
+    def _try_ipc_push(applied: list[ChangeRecord]) -> int:
+        """Attempt to push applied changes to KiCad via IPC.
+
+        Returns the number of changes successfully pushed, or 0 if IPC
+        is not available.
+        """
+        try:
+            from ..backends.ipc_api import IpcBackend
+        except Exception:
+            return 0
+
+        ipc = IpcBackend.get()
+        if not ipc.is_connected():
+            return 0
+
+        pushed = 0
+        for change in applied:
+            try:
+                SessionManager._push_change_to_ipc(ipc, change)
+                pushed += 1
+            except Exception:
+                pass  # IPC push is best-effort
+
+        if pushed > 0:
+            with contextlib.suppress(Exception):
+                ipc.commit_to_undo()
+
+        return pushed
+
+    @staticmethod
+    def _push_change_to_ipc(ipc: Any, change: ChangeRecord) -> None:
+        """Push a single change to KiCad via IPC."""
+        op = change.operation
+        if op == "move_component":
+            x, y = SessionManager._parse_at_coords(change.after_snapshot)
+            if x is not None and y is not None:
+                ipc.move_footprint(change.target, x, y)
+        elif op == "rotate_component":
+            parts = change.after_snapshot.strip("()").split()
+            if len(parts) >= 4:
+                angle = float(parts[3])
+                ipc.rotate_footprint(change.target, angle)
+        elif op == "delete_component":
+            ipc.delete_footprint(change.target)
+
+    @staticmethod
+    def _parse_at_coords(snapshot: str) -> tuple[float | None, float | None]:
+        """Extract x, y from an ``(at X Y ...)`` S-expression string."""
+        stripped = snapshot.strip()
+        if stripped.startswith("(at "):
+            parts = stripped[1:-1].split()
+            if len(parts) >= 3:
+                try:
+                    return float(parts[1]), float(parts[2])
+                except ValueError:
+                    pass
+        return None, None
 
     def rollback(self, session: Session) -> dict[str, Any]:
         """Rollback all changes — discard the working copy."""
