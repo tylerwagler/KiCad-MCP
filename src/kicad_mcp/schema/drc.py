@@ -38,15 +38,19 @@ class DrcResult:
     warning_count: int
     violations: list[DrcViolation] = field(default_factory=list)
     report_path: str | None = None
+    message: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "passed": self.passed,
             "error_count": self.error_count,
             "warning_count": self.warning_count,
             "violations": [v.to_dict() for v in self.violations],
             "report_path": self.report_path,
         }
+        if self.message:
+            d["message"] = self.message
+        return d
 
 
 @dataclass

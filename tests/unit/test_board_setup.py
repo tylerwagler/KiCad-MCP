@@ -90,29 +90,73 @@ class TestAddBoardOutline:
 
     def test_outline_creates_correct_segments(self) -> None:
         mgr, session = self._make_session()
-        before_count = len(
-            [
-                c
-                for c in session._working_doc.root.children
-                if c.name == "gr_line"
-                and c.get("layer")
-                and c.get("layer").first_value == "Edge.Cuts"
-            ]
-        )
 
         points = [(0, 0), (50, 0), (50, 30)]
         mgr.apply_add_board_outline(session, points)
 
-        after_count = len(
-            [
-                c
-                for c in session._working_doc.root.children
-                if c.name == "gr_line"
-                and c.get("layer")
-                and c.get("layer").first_value == "Edge.Cuts"
-            ]
-        )
-        assert after_count == before_count + 3
+        edge_cuts = [
+            c
+            for c in session._working_doc.root.children
+            if c.name == "gr_line"
+            and c.get("layer")
+            and c.get("layer").first_value == "Edge.Cuts"
+        ]
+        # Should have exactly 3 segments (previous edges cleared)
+        assert len(edge_cuts) == 3
+
+    def test_outline_clears_existing_edges(self) -> None:
+        """add_board_outline replaces existing Edge.Cuts lines."""
+        mgr, session = self._make_session()
+        # First call set_board_size to create 4 edges
+        mgr.apply_set_board_size(session, 50, 30)
+        # Then add_board_outline with 4 points — should clear the 4 from set_board_size
+        mgr.apply_add_board_outline(session, [(0, 0), (40, 0), (40, 25), (0, 25)])
+
+        edge_cuts = [
+            c
+            for c in session._working_doc.root.children
+            if c.name == "gr_line"
+            and c.get("layer")
+            and c.get("layer").first_value == "Edge.Cuts"
+        ]
+        # Should have exactly 4 from add_board_outline (not 8 from both)
+        assert len(edge_cuts) == 4
+
+    def test_outline_undo_restores_previous_edges(self) -> None:
+        """Undoing add_board_outline restores the previous Edge.Cuts lines."""
+        mgr, session = self._make_session()
+        # Set initial outline via set_board_size
+        mgr.apply_set_board_size(session, 50, 30)
+        edges_after_size = [
+            c
+            for c in session._working_doc.root.children
+            if c.name == "gr_line"
+            and c.get("layer")
+            and c.get("layer").first_value == "Edge.Cuts"
+        ]
+        assert len(edges_after_size) == 4
+
+        # Replace with a 3-point outline
+        mgr.apply_add_board_outline(session, [(0, 0), (60, 0), (60, 40)])
+        edges_after_outline = [
+            c
+            for c in session._working_doc.root.children
+            if c.name == "gr_line"
+            and c.get("layer")
+            and c.get("layer").first_value == "Edge.Cuts"
+        ]
+        assert len(edges_after_outline) == 3
+
+        # Undo should restore the 4 edges from set_board_size
+        mgr.undo(session)
+        edges_after_undo = [
+            c
+            for c in session._working_doc.root.children
+            if c.name == "gr_line"
+            and c.get("layer")
+            and c.get("layer").first_value == "Edge.Cuts"
+        ]
+        assert len(edges_after_undo) == 4
 
     def test_outline_too_few_points_fails(self) -> None:
         mgr, session = self._make_session()

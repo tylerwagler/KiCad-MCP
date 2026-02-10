@@ -136,18 +136,24 @@ class KiCadCli:
         try:
             report = json.loads(Path(output_path).read_text(encoding="utf-8"))
         except (json.JSONDecodeError, FileNotFoundError):
-            # If JSON parse fails, create a basic result from return code
+            # JSON not produced — kicad-cli likely failed to run DRC
+            stderr = result.stderr.strip()
+            stdout = result.stdout.strip()
+            message = stderr or stdout or "kicad-cli produced no DRC report"
             return DrcResult(
-                passed=result.returncode == 0,
+                passed=False,
                 error_count=0,
                 warning_count=0,
                 report_path=output_path,
+                message=f"DRC report unavailable: {message}",
             )
 
-        return self._parse_drc_report(report, output_path)
+        return self._parse_drc_report(report, output_path, result.stderr.strip())
 
     @staticmethod
-    def _parse_drc_report(report: dict[str, Any], report_path: str) -> DrcResult:
+    def _parse_drc_report(
+        report: dict[str, Any], report_path: str, stderr: str = ""
+    ) -> DrcResult:
         """Parse a kicad-cli DRC JSON report into a DrcResult."""
         violations: list[DrcViolation] = []
         error_count = 0
@@ -204,6 +210,7 @@ class KiCadCli:
             warning_count=warning_count,
             violations=violations,
             report_path=report_path,
+            message=stderr if stderr and error_count == 0 else "",
         )
 
     def export_gerbers(

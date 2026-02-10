@@ -1113,7 +1113,10 @@ class SessionManager:
         session: Session,
         points: list[tuple[float, float]],
     ) -> ChangeRecord:
-        """Add board outline segments on Edge.Cuts layer.
+        """Replace board outline with segments on Edge.Cuts layer.
+
+        Removes any existing Edge.Cuts gr_line/gr_rect nodes first to avoid
+        duplicate outlines, then creates new line segments.
 
         Args:
             session: Active session.
@@ -1125,6 +1128,18 @@ class SessionManager:
 
         if len(points) < 3:
             raise ValueError("Board outline requires at least 3 points")
+
+        # Remove existing Edge.Cuts gr_line/gr_rect nodes
+        before_lines: list[str] = []
+        to_remove = []
+        for child in session._working_doc.root.children:
+            if child.name in ("gr_line", "gr_rect"):
+                layer_node = child.get("layer")
+                if layer_node and layer_node.first_value == "Edge.Cuts":
+                    before_lines.append(child.to_string())
+                    to_remove.append(child)
+        for node in to_remove:
+            session._working_doc.root.children.remove(node)
 
         after_lines = []
         for i in range(len(points)):
@@ -1143,9 +1158,9 @@ class SessionManager:
         record = ChangeRecord(
             change_id=str(uuid.uuid4())[:8],
             operation="add_board_outline",
-            description=f"Add board outline with {len(points)} points",
+            description=f"Set board outline with {len(points)} points",
             target="Edge.Cuts",
-            before_snapshot="",
+            before_snapshot="\n".join(before_lines),
             after_snapshot="\n".join(after_lines),
             applied=True,
         )
@@ -1776,6 +1791,11 @@ class SessionManager:
                         if child.name == "gr_line" and child.to_string() == line_str:
                             session._working_doc.root.children.pop(i)
                             break
+            # Restore previous Edge.Cuts lines if any
+            if record.before_snapshot:
+                for line_str in record.before_snapshot.split("\n"):
+                    if line_str.strip():
+                        session._working_doc.root.children.append(sexp_parse(line_str))
 
         elif record.operation == "add_mounting_hole":
             # Remove the added mounting hole footprint
