@@ -3,6 +3,8 @@
 # Import modules to trigger tool registration via register_tool() calls
 from . import (  # noqa: F401
     analysis,
+    autoplacement,
+    autoroute,
     board_setup,
     direct,
     drc,
