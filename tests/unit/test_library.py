@@ -229,6 +229,36 @@ class TestLibraryToolHandlers:
         result = TOOL_REGISTRY["list_symbols_in_library"].handler(library="Device")
         assert result["library"] == "Device"
         assert result["count"] > 0
+        assert "returned" in result
+        assert "offset" in result
+        assert "has_more" in result
+
+    def test_list_symbols_pagination(self) -> None:
+        from kicad_mcp.tools import TOOL_REGISTRY
+
+        handler = TOOL_REGISTRY["list_symbols_in_library"].handler
+        page1 = handler(library="Device", limit=5, offset=0)
+        assert page1["returned"] == 5
+        assert page1["offset"] == 0
+        assert page1["has_more"] is True
+        assert len(page1["symbols"]) == 5
+
+        page2 = handler(library="Device", limit=5, offset=5)
+        assert page2["returned"] == 5
+        assert page2["offset"] == 5
+        # Pages should not overlap
+        names1 = {s["name"] for s in page1["symbols"]}
+        names2 = {s["name"] for s in page2["symbols"]}
+        assert names1.isdisjoint(names2)
+
+    def test_list_symbols_offset_past_end(self) -> None:
+        from kicad_mcp.tools import TOOL_REGISTRY
+
+        handler = TOOL_REGISTRY["list_symbols_in_library"].handler
+        result = handler(library="Device", limit=10, offset=999999)
+        assert result["returned"] == 0
+        assert result["has_more"] is False
+        assert result["symbols"] == []
 
     def test_list_symbols_unknown_library(self) -> None:
         from kicad_mcp.tools import TOOL_REGISTRY
@@ -242,6 +272,34 @@ class TestLibraryToolHandlers:
         result = TOOL_REGISTRY["list_footprints_in_library"].handler(library="Resistor_SMD")
         assert result["library"] == "Resistor_SMD"
         assert result["count"] > 0
+        assert "returned" in result
+        assert "offset" in result
+        assert "has_more" in result
+
+    def test_list_footprints_pagination(self) -> None:
+        from kicad_mcp.tools import TOOL_REGISTRY
+
+        handler = TOOL_REGISTRY["list_footprints_in_library"].handler
+        page1 = handler(library="Resistor_SMD", limit=3, offset=0)
+        assert page1["returned"] == 3
+        assert page1["offset"] == 0
+        assert len(page1["footprints"]) == 3
+
+        page2 = handler(library="Resistor_SMD", limit=3, offset=3)
+        assert page2["returned"] == 3
+        assert page2["offset"] == 3
+        names1 = {f["name"] for f in page1["footprints"]}
+        names2 = {f["name"] for f in page2["footprints"]}
+        assert names1.isdisjoint(names2)
+
+    def test_list_footprints_offset_past_end(self) -> None:
+        from kicad_mcp.tools import TOOL_REGISTRY
+
+        handler = TOOL_REGISTRY["list_footprints_in_library"].handler
+        result = handler(library="Resistor_SMD", limit=10, offset=999999)
+        assert result["returned"] == 0
+        assert result["has_more"] is False
+        assert result["footprints"] == []
 
     def test_get_footprint_details_tool(self) -> None:
         from kicad_mcp.tools import TOOL_REGISTRY

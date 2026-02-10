@@ -82,11 +82,17 @@ def _search_footprints_handler(
     }
 
 
-def _list_symbols_in_lib_handler(library: str) -> dict[str, Any]:
-    """List all symbols in a specific symbol library.
+def _list_symbols_in_lib_handler(
+    library: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List symbols in a specific symbol library with pagination.
 
     Args:
         library: Library name (e.g., "Device", "Amplifier_Operational").
+        limit: Maximum number of symbols to return. Default: 50.
+        offset: Number of symbols to skip. Default: 0.
     """
     from pathlib import Path
 
@@ -102,18 +108,29 @@ def _list_symbols_in_lib_handler(library: str) -> dict[str, Any]:
         return {"error": f"Library file not found: {matches[0].uri}"}
 
     symbols = list_symbols_in_library(lib_path)
+    total = len(symbols)
+    page = symbols[offset : offset + limit]
     return {
         "library": library,
-        "count": len(symbols),
-        "symbols": [s.to_dict() for s in symbols],
+        "count": total,
+        "returned": len(page),
+        "offset": offset,
+        "has_more": offset + limit < total,
+        "symbols": [s.to_dict() for s in page],
     }
 
 
-def _list_footprints_in_lib_handler(library: str) -> dict[str, Any]:
-    """List all footprints in a specific footprint library.
+def _list_footprints_in_lib_handler(
+    library: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List footprints in a specific footprint library with pagination.
 
     Args:
         library: Library name (e.g., "Resistor_SMD", "Package_QFP").
+        limit: Maximum number of footprints to return. Default: 50.
+        offset: Number of footprints to skip. Default: 0.
     """
     from pathlib import Path
 
@@ -129,10 +146,15 @@ def _list_footprints_in_lib_handler(library: str) -> dict[str, Any]:
         return {"error": f"Library directory not found: {matches[0].uri}"}
 
     footprints = list_footprints_in_library(lib_path)
+    total = len(footprints)
+    page = footprints[offset : offset + limit]
     return {
         "library": library,
-        "count": len(footprints),
-        "footprints": [f.to_dict() for f in footprints],
+        "count": total,
+        "returned": len(page),
+        "offset": offset,
+        "has_more": offset + limit < total,
+        "footprints": [f.to_dict() for f in page],
     }
 
 
@@ -221,11 +243,19 @@ register_tool(
 
 register_tool(
     name="list_symbols_in_library",
-    description="List all symbols in a specific symbol library.",
+    description="List symbols in a specific symbol library (paginated).",
     parameters={
         "library": {
             "type": "string",
             "description": "Library name (e.g., 'Device', 'Amplifier_Operational').",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Max symbols to return. Default: 50.",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Number of symbols to skip. Default: 0.",
         },
     },
     handler=_list_symbols_in_lib_handler,
@@ -234,11 +264,19 @@ register_tool(
 
 register_tool(
     name="list_footprints_in_library",
-    description="List all footprints in a specific footprint library.",
+    description="List footprints in a specific footprint library (paginated).",
     parameters={
         "library": {
             "type": "string",
             "description": "Library name (e.g., 'Resistor_SMD', 'Package_QFP').",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Max footprints to return. Default: 50.",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Number of footprints to skip. Default: 0.",
         },
     },
     handler=_list_footprints_in_lib_handler,

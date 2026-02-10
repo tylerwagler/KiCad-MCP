@@ -89,3 +89,53 @@ class TestRouterDispatch:
     def test_execute_unknown_tool(self) -> None:
         # Verify the registry doesn't have a fake tool
         assert "nonexistent_tool" not in TOOL_REGISTRY
+
+
+class TestTruncateResponse:
+    """Test the _truncate_response safety net."""
+
+    def test_small_response_unchanged(self) -> None:
+        from kicad_mcp.tools.router import _truncate_response
+
+        data = {"items": [1, 2, 3], "count": 3}
+        result = _truncate_response(data)
+        assert result == {"items": [1, 2, 3], "count": 3}
+        assert "_truncated" not in result
+
+    def test_large_response_truncated(self) -> None:
+        from kicad_mcp.tools.router import MAX_RESPONSE_CHARS, _truncate_response
+
+        # Build a response that exceeds the limit
+        big_list = [{"name": f"item_{i}", "data": "x" * 200} for i in range(1000)]
+        data = {"items": big_list, "count": len(big_list)}
+        import json
+
+        assert len(json.dumps(data)) > MAX_RESPONSE_CHARS
+
+        result = _truncate_response(data)
+        assert result["_truncated"] is True
+        assert "_message" in result
+        assert len(result["items"]) < 1000
+
+        # Result should now fit within the limit
+        assert len(json.dumps(result, default=str)) <= MAX_RESPONSE_CHARS
+
+    def test_no_list_fields_unchanged(self) -> None:
+        from kicad_mcp.tools.router import _truncate_response
+
+        data = {"big_string": "x" * 100_000}
+        result = _truncate_response(data)
+        # Can't truncate a non-list field, so returned as-is
+        assert "_truncated" not in result
+
+    def test_truncation_picks_largest_list(self) -> None:
+        from kicad_mcp.tools.router import _truncate_response
+
+        big_list = [{"data": "x" * 300} for _ in range(500)]
+        small_list = [1, 2, 3]
+        data = {"big": big_list, "small": small_list, "count": 500}
+        result = _truncate_response(data)
+        assert result["_truncated"] is True
+        # Small list should be untouched
+        assert result["small"] == [1, 2, 3]
+        assert len(result["big"]) < 500

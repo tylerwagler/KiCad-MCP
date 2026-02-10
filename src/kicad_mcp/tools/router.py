@@ -13,11 +13,57 @@ The LLM discovers and invokes specialized tools on-demand, reducing context by ~
 from __future__ import annotations
 
 import inspect
+import json
 from typing import Any
 
 from fastmcp import FastMCP
 
 from .registry import TOOL_REGISTRY, get_categories
+
+MAX_RESPONSE_CHARS = 50_000  # ~12k tokens
+
+
+def _truncate_response(result: dict[str, Any]) -> dict[str, Any]:
+    """Truncate oversized responses by trimming the largest list field."""
+    try:
+        raw = json.dumps(result, default=str)
+    except (TypeError, ValueError):
+        return result
+
+    if len(raw) <= MAX_RESPONSE_CHARS:
+        return result
+
+    # Find the largest list-valued field
+    largest_key = None
+    largest_len = 0
+    for key, value in result.items():
+        if isinstance(value, list) and len(value) > largest_len:
+            largest_key = key
+            largest_len = len(value)
+
+    if largest_key is None or largest_len == 0:
+        return result
+
+    # Binary-search for a list length that fits
+    lo, hi = 0, largest_len
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        result[largest_key] = result[largest_key][:mid]
+        try:
+            if len(json.dumps(result, default=str)) <= MAX_RESPONSE_CHARS:
+                lo = mid
+            else:
+                hi = mid - 1
+        except (TypeError, ValueError):
+            hi = mid - 1
+
+    result[largest_key] = result[largest_key][:lo]
+    result["_truncated"] = True
+    result["_message"] = (
+        f"Response truncated: '{largest_key}' reduced from {largest_len} to {lo} items. "
+        "Use limit/offset parameters or search_* tools for narrower results."
+    )
+    return result
 
 
 def register_router_tools(mcp: FastMCP) -> None:
@@ -103,6 +149,8 @@ def register_router_tools(mcp: FastMCP) -> None:
                 import asyncio
 
                 result = asyncio.get_event_loop().run_until_complete(result)
+            if isinstance(result, dict):
+                result = _truncate_response(result)
             return result  # type: ignore[no-any-return]
         except TypeError as e:
             return {"error": f"Invalid arguments for {tool_name}: {e}"}

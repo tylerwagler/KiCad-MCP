@@ -35,13 +35,26 @@ def _get_board_info_handler() -> dict[str, Any]:
     return summary.to_dict()
 
 
-def _list_components_handler() -> dict[str, Any]:
-    """List all components (footprints) on the board."""
+def _list_components_handler(
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List components (footprints) on the board with pagination.
+
+    Args:
+        limit: Maximum number of components to return. Default: 100.
+        offset: Number of components to skip. Default: 0.
+    """
     from .. import state
 
     footprints = state.get_footprints()
+    total = len(footprints)
+    page = footprints[offset : offset + limit]
     return {
-        "count": len(footprints),
+        "count": total,
+        "returned": len(page),
+        "offset": offset,
+        "has_more": offset + limit < total,
         "components": [
             {
                 "reference": fp.reference,
@@ -50,7 +63,7 @@ def _list_components_handler() -> dict[str, Any]:
                 "layer": fp.layer,
                 "position": fp.position.to_dict(),
             }
-            for fp in footprints
+            for fp in page
         ],
     }
 
@@ -95,9 +108,18 @@ register_tool(
 register_tool(
     name="list_components",
     description=(
-        "List all components (footprints) on the board with reference, value, and position."
+        "List components (footprints) on the board with reference, value, and position (paginated)."
     ),
-    parameters={},
+    parameters={
+        "limit": {
+            "type": "integer",
+            "description": "Max components to return. Default: 100.",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Number of components to skip. Default: 0.",
+        },
+    },
     handler=_list_components_handler,
     category="project",
     direct=True,
