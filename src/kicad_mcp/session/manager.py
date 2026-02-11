@@ -1950,16 +1950,25 @@ class SessionManager:
             return 0
 
         pushed = 0
+        has_routing_changes = False
         for change in applied:
             try:
                 SessionManager._push_change_to_ipc(ipc, change)
                 pushed += 1
+                # Track if we pushed any routing changes
+                if change.operation in ("route_trace", "add_via", "create_zone"):
+                    has_routing_changes = True
             except Exception:
                 pass  # IPC push is best-effort
 
         if pushed > 0:
             with contextlib.suppress(Exception):
                 ipc.commit_to_undo()
+
+            # Auto-refill zones after routing changes
+            if has_routing_changes:
+                with contextlib.suppress(Exception):
+                    ipc.refill_zones()
 
         return pushed
 
@@ -1978,6 +1987,42 @@ class SessionManager:
                 ipc.rotate_footprint(change.target, angle)
         elif op == "delete_component":
             ipc.delete_footprint(change.target)
+        elif op == "route_trace":
+            # Parse segment: (segment (start X Y) (end X Y) (width W) (layer "L") (net N) ...)
+            params = SessionManager._parse_segment_snapshot(change.after_snapshot)
+            if params:
+                ipc.create_track_segment(
+                    params["start_x"],
+                    params["start_y"],
+                    params["end_x"],
+                    params["end_y"],
+                    params["width"],
+                    params["layer"],
+                    params["net"],
+                )
+        elif op == "add_via":
+            # Parse via: (via (at X Y) (size S) (drill D) (layers "L1" "L2") (net N) ...)
+            params = SessionManager._parse_via_snapshot(change.after_snapshot)
+            if params:
+                ipc.create_via(
+                    params["x"],
+                    params["y"],
+                    params["size"],
+                    params["drill"],
+                    (params["layer_start"], params["layer_end"]),
+                    params["net"],
+                )
+        elif op == "create_zone":
+            # Parse zone: (zone (net N) (layers "L") ... (polygon (pts ...)))
+            params = SessionManager._parse_zone_snapshot(change.after_snapshot)
+            if params:
+                ipc.create_zone(
+                    params["net"],
+                    params["layer"],
+                    params["outline_points"],
+                    params.get("priority", 0),
+                    params.get("min_thickness", 0.25),
+                )
 
     @staticmethod
     def _parse_at_coords(snapshot: str) -> tuple[float | None, float | None]:
@@ -1991,6 +2036,118 @@ class SessionManager:
                 except ValueError:
                     pass
         return None, None
+
+    @staticmethod
+    def _parse_segment_snapshot(snapshot: str) -> dict[str, Any] | None:
+        """Parse segment S-expression.
+
+        Format: (segment (start X Y) (end X Y) (width W) (layer "L") (net N) ...)
+        """
+        try:
+            from ..sexp.parser import parse as sexp_parse
+
+            node = sexp_parse(snapshot)
+            if node.name != "segment":
+                return None
+
+            start = node.find("start")
+            end = node.find("end")
+            width = node.find("width")
+            layer = node.find("layer")
+            net = node.find("net")
+
+            if not all([start, end, width, layer, net]):
+                return None
+
+            return {
+                "start_x": float(start.atom_values[0]),
+                "start_y": float(start.atom_values[1]),
+                "end_x": float(end.atom_values[0]),
+                "end_y": float(end.atom_values[1]),
+                "width": float(width.first_value),
+                "layer": layer.first_value.strip('"'),
+                "net": int(net.first_value),
+            }
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_via_snapshot(snapshot: str) -> dict[str, Any] | None:
+        """Parse via S-expression.
+
+        Format: (via (at X Y) (size S) (drill D) (layers "L1" "L2") (net N) ...)
+        """
+        try:
+            from ..sexp.parser import parse as sexp_parse
+
+            node = sexp_parse(snapshot)
+            if node.name != "via":
+                return None
+
+            at = node.find("at")
+            size = node.find("size")
+            drill = node.find("drill")
+            layers = node.find("layers")
+            net = node.find("net")
+
+            if not all([at, size, drill, layers, net]):
+                return None
+
+            layer_vals = layers.atom_values
+            return {
+                "x": float(at.atom_values[0]),
+                "y": float(at.atom_values[1]),
+                "size": float(size.first_value),
+                "drill": float(drill.first_value),
+                "layer_start": layer_vals[0].strip('"'),
+                "layer_end": layer_vals[1].strip('"'),
+                "net": int(net.first_value),
+            }
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_zone_snapshot(snapshot: str) -> dict[str, Any] | None:
+        """Parse zone S-expression: (zone (net N) (layers "L") ... (polygon (pts ...)))"""
+        try:
+            from ..sexp.parser import parse as sexp_parse
+
+            node = sexp_parse(snapshot)
+            if node.name != "zone":
+                return None
+
+            net = node.find("net")
+            layers = node.find("layers")
+            polygon = node.find("polygon")
+            priority_node = node.find("priority")
+
+            if not all([net, layers, polygon]):
+                return None
+
+            # Extract outline points from polygon
+            pts_node = polygon.find("pts")
+            if not pts_node:
+                return None
+
+            outline_points = []
+            for xy_node in pts_node.children:
+                if xy_node.name == "xy":
+                    vals = xy_node.atom_values
+                    if len(vals) >= 2:
+                        outline_points.append((float(vals[0]), float(vals[1])))
+
+            layer = layers.first_value.strip('"')
+            priority = int(priority_node.first_value) if priority_node else 0
+
+            return {
+                "net": int(net.first_value),
+                "layer": layer,
+                "outline_points": outline_points,
+                "priority": priority,
+                "min_thickness": 0.25,  # Default, not stored in S-expr typically
+            }
+        except Exception:
+            return None
 
     @staticmethod
     def _reverse_ipc_changes(applied: list[ChangeRecord]) -> int:

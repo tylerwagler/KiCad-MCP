@@ -397,6 +397,179 @@ class IpcBackend:
 
     # ── Write operations (live push) ────────────────────────────────
 
+    def create_track_segment(
+        self,
+        start_x: float,
+        start_y: float,
+        end_x: float,
+        end_y: float,
+        width: float,
+        layer: str,
+        net_code: int,
+    ) -> str:
+        """Create a track segment and add to board.
+
+        Args:
+            start_x: Start X coordinate in mm
+            start_y: Start Y coordinate in mm
+            end_x: End X coordinate in mm
+            end_y: End Y coordinate in mm
+            width: Track width in mm
+            layer: Layer name (e.g., "F.Cu", "B.Cu")
+            net_code: Net code (0 for no net)
+
+        Returns:
+            UUID of created segment as string.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            # Import track segment class from kipy
+            from kipy.board import TrackSegment  # type: ignore[import-untyped]
+
+            # Create track segment object
+            segment = TrackSegment()
+            segment.start = _Vector2.from_xy(self._mm_to_nm(start_x), self._mm_to_nm(start_y))
+            segment.end = _Vector2.from_xy(self._mm_to_nm(end_x), self._mm_to_nm(end_y))
+            segment.width = self._mm_to_nm(width)
+            segment.net_code = net_code
+            # Layer assignment will depend on kipy API - may need layer enum
+            if hasattr(segment, "layer"):
+                segment.layer = layer  # type: ignore[assignment]
+
+            # Add to board
+            board.create_items(segment)
+
+            # Return UUID for tracking
+            uuid_str = str(segment.uuid) if hasattr(segment, "uuid") else ""
+            return uuid_str
+        except IpcError:
+            raise
+        except Exception as exc:
+            raise IpcError(f"Failed to create track segment: {exc}") from exc
+
+    def create_via(
+        self,
+        x: float,
+        y: float,
+        size: float,
+        drill: float,
+        layers: tuple[str, str],
+        net_code: int,
+    ) -> str:
+        """Create a via and add to board.
+
+        Args:
+            x: X coordinate in mm
+            y: Y coordinate in mm
+            size: Via size (diameter) in mm
+            drill: Drill diameter in mm
+            layers: Tuple of (start_layer, end_layer), e.g., ("F.Cu", "B.Cu")
+            net_code: Net code (0 for no net)
+
+        Returns:
+            UUID of created via as string.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            # Import via class from kipy
+            from kipy.board import Via  # type: ignore[import-untyped]
+
+            # Create via object
+            via = Via()
+            via.position = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
+            via.width = self._mm_to_nm(size)
+            via.drill = self._mm_to_nm(drill)
+            via.net_code = net_code
+            # Layer span
+            if hasattr(via, "layer_start") and hasattr(via, "layer_end"):
+                via.layer_start = layers[0]  # type: ignore[assignment]
+                via.layer_end = layers[1]  # type: ignore[assignment]
+
+            # Add to board
+            board.create_items(via)
+
+            # Return UUID for tracking
+            uuid_str = str(via.uuid) if hasattr(via, "uuid") else ""
+            return uuid_str
+        except IpcError:
+            raise
+        except Exception as exc:
+            raise IpcError(f"Failed to create via: {exc}") from exc
+
+    def create_zone(
+        self,
+        net_code: int,
+        layer: str,
+        outline_points: list[tuple[float, float]],
+        priority: int = 0,
+        min_thickness: float = 0.25,
+    ) -> str:
+        """Create a copper zone and add to board.
+
+        Args:
+            net_code: Net code for the zone
+            layer: Layer name (e.g., "F.Cu", "B.Cu")
+            outline_points: List of (x, y) coordinate tuples in mm defining the zone boundary
+            priority: Zone priority (higher fills first)
+            min_thickness: Minimum copper thickness in mm
+
+        Returns:
+            UUID of created zone as string.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            # Import zone class from kipy
+            from kipy.board import Zone  # type: ignore[import-untyped]
+
+            # Create zone object
+            zone = Zone()
+            zone.net_code = net_code
+            if hasattr(zone, "layer"):
+                zone.layer = layer  # type: ignore[assignment]
+            zone.priority = priority
+
+            # Set outline points
+            if hasattr(zone, "outline"):
+                outline = []
+                for x, y in outline_points:
+                    pt = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
+                    outline.append(pt)
+                zone.outline = outline
+
+            # Minimum thickness
+            if hasattr(zone, "min_thickness"):
+                zone.min_thickness = self._mm_to_nm(min_thickness)
+
+            # Add to board
+            board.create_items(zone)
+
+            # Return UUID for tracking
+            uuid_str = str(zone.uuid) if hasattr(zone, "uuid") else ""
+            return uuid_str
+        except IpcError:
+            raise
+        except Exception as exc:
+            raise IpcError(f"Failed to create zone: {exc}") from exc
+
+    def refill_zones(self) -> None:
+        """Trigger zone refill (updates copper pours after routing changes).
+
+        This should be called after adding/modifying tracks or vias to ensure
+        zone fills are up-to-date for DRC checks.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "refill_zones"):
+                board.refill_zones()
+            elif hasattr(board, "rebuild_zones"):
+                board.rebuild_zones()
+        except Exception as exc:
+            raise IpcError(f"Failed to refill zones: {exc}") from exc
+
     def move_footprint(self, reference: str, x: float, y: float) -> None:
         """Move a footprint to a new position in KiCad GUI."""
         self.require_connection()

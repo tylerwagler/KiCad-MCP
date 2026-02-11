@@ -328,6 +328,166 @@ def _ipc_get_version_handler() -> dict[str, Any]:
         return _ipc_error_response(exc)
 
 
+def _ipc_create_track_handler(
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    width: float,
+    layer: str,
+    net_code: int = 0,
+) -> dict[str, Any]:
+    """Create a track segment in KiCad GUI.
+
+    The track appears immediately in KiCad. This provides instant visual
+    feedback without waiting for a session commit.
+
+    Args:
+        start_x: Start X coordinate in mm
+        start_y: Start Y coordinate in mm
+        end_x: End X coordinate in mm
+        end_y: End Y coordinate in mm
+        width: Track width in mm
+        layer: Layer name (e.g., "F.Cu", "B.Cu")
+        net_code: Net code (0 for no net)
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        uuid = ipc.create_track_segment(start_x, start_y, end_x, end_y, width, layer, net_code)
+        return {
+            "status": "created",
+            "uuid": uuid,
+            "type": "track",
+            "start": {"x": start_x, "y": start_y},
+            "end": {"x": end_x, "y": end_y},
+            "width": width,
+            "layer": layer,
+        }
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_create_via_handler(
+    x: float,
+    y: float,
+    size: float,
+    drill: float,
+    layer_start: str = "F.Cu",
+    layer_end: str = "B.Cu",
+    net_code: int = 0,
+) -> dict[str, Any]:
+    """Create a via in KiCad GUI.
+
+    The via appears immediately in KiCad. This provides instant visual
+    feedback without waiting for a session commit.
+
+    Args:
+        x: X coordinate in mm
+        y: Y coordinate in mm
+        size: Via size (diameter) in mm
+        drill: Drill diameter in mm
+        layer_start: Start layer (default: "F.Cu")
+        layer_end: End layer (default: "B.Cu")
+        net_code: Net code (0 for no net)
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        uuid = ipc.create_via(x, y, size, drill, (layer_start, layer_end), net_code)
+        return {
+            "status": "created",
+            "uuid": uuid,
+            "type": "via",
+            "position": {"x": x, "y": y},
+            "size": size,
+            "drill": drill,
+            "layers": {"start": layer_start, "end": layer_end},
+        }
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_create_zone_handler(
+    net_code: int,
+    layer: str,
+    outline_points: str,
+    priority: int = 0,
+    min_thickness: float = 0.25,
+) -> dict[str, Any]:
+    """Create a copper zone in KiCad GUI.
+
+    The zone appears immediately in KiCad. This provides instant visual
+    feedback without waiting for a session commit.
+
+    Args:
+        net_code: Net code for the zone
+        layer: Layer name (e.g., "F.Cu", "B.Cu")
+        outline_points: JSON array of [x, y] coordinate pairs defining the zone boundary
+        priority: Zone priority (higher fills first, default: 0)
+        min_thickness: Minimum copper thickness in mm (default: 0.25)
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    # Parse outline_points from JSON string
+    import json
+
+    try:
+        points_list = json.loads(outline_points)
+        points = [(pt[0], pt[1]) for pt in points_list]
+    except (json.JSONDecodeError, IndexError, TypeError) as exc:
+        return {"error": f"Invalid outline_points format: {exc}"}
+
+    ipc = _get_ipc()
+    try:
+        uuid = ipc.create_zone(net_code, layer, points, priority, min_thickness)
+        return {
+            "status": "created",
+            "uuid": uuid,
+            "type": "zone",
+            "net_code": net_code,
+            "layer": layer,
+            "outline_points": points,
+            "priority": priority,
+        }
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_refill_zones_handler() -> dict[str, Any]:
+    """Trigger zone refill in KiCad.
+
+    Updates all copper pours. Should be called after adding/modifying
+    tracks or vias to ensure zone fills are current for DRC checks.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        ipc.refill_zones()
+        return {"status": "refilled", "message": "Zone fills updated"}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
 # ── Tool Registration ───────────────────────────────────────────────
 
 register_tool(
@@ -453,5 +613,89 @@ register_tool(
     ),
     parameters={},
     handler=_ipc_get_version_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_create_track",
+    description=(
+        "Create a track segment in KiCad GUI. "
+        "The track appears immediately without waiting for session commit."
+    ),
+    parameters={
+        "start_x": {"type": "number", "description": "Start X coordinate in mm"},
+        "start_y": {"type": "number", "description": "Start Y coordinate in mm"},
+        "end_x": {"type": "number", "description": "End X coordinate in mm"},
+        "end_y": {"type": "number", "description": "End Y coordinate in mm"},
+        "width": {"type": "number", "description": "Track width in mm"},
+        "layer": {"type": "string", "description": "Layer name (e.g., 'F.Cu', 'B.Cu')"},
+        "net_code": {"type": "integer", "description": "Net code (0 for no net)", "default": 0},
+    },
+    handler=_ipc_create_track_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_create_via",
+    description=(
+        "Create a via in KiCad GUI. The via appears immediately without waiting for session commit."
+    ),
+    parameters={
+        "x": {"type": "number", "description": "X coordinate in mm"},
+        "y": {"type": "number", "description": "Y coordinate in mm"},
+        "size": {"type": "number", "description": "Via size (diameter) in mm"},
+        "drill": {"type": "number", "description": "Drill diameter in mm"},
+        "layer_start": {
+            "type": "string",
+            "description": "Start layer",
+            "default": "F.Cu",
+        },
+        "layer_end": {
+            "type": "string",
+            "description": "End layer",
+            "default": "B.Cu",
+        },
+        "net_code": {"type": "integer", "description": "Net code (0 for no net)", "default": 0},
+    },
+    handler=_ipc_create_via_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_create_zone",
+    description=(
+        "Create a copper zone in KiCad GUI. "
+        "The zone appears immediately without waiting for session commit."
+    ),
+    parameters={
+        "net_code": {"type": "integer", "description": "Net code for the zone"},
+        "layer": {"type": "string", "description": "Layer name (e.g., 'F.Cu', 'B.Cu')"},
+        "outline_points": {
+            "type": "string",
+            "description": "JSON array of [x, y] coordinate pairs defining zone boundary",
+        },
+        "priority": {
+            "type": "integer",
+            "description": "Zone priority (higher fills first)",
+            "default": 0,
+        },
+        "min_thickness": {
+            "type": "number",
+            "description": "Minimum copper thickness in mm",
+            "default": 0.25,
+        },
+    },
+    handler=_ipc_create_zone_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_refill_zones",
+    description=(
+        "Trigger zone refill in KiCad. "
+        "Updates all copper pours after adding/modifying tracks or vias."
+    ),
+    parameters={},
+    handler=_ipc_refill_zones_handler,
     category="ipc_sync",
 )

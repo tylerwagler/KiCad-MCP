@@ -538,6 +538,90 @@ class TestIpcOperations:
         assert result["minor"] == 2
         assert result["patch"] == 3
 
+    def test_create_track_segment(self) -> None:
+        """Create a track segment on the board."""
+        board = _make_mock_board()
+        board.create_items = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        # Mock the TrackSegment class by patching the import
+        mock_track = MagicMock()
+        mock_track.uuid = "track-uuid-123"
+        mock_track_cls = MagicMock(return_value=mock_track)
+
+        with (
+            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
+            patch.dict("sys.modules", {"kipy.board": MagicMock(TrackSegment=mock_track_cls)}),
+        ):
+            mock_vec.from_xy.return_value = MagicMock()
+
+            uuid = ipc.create_track_segment(10, 10, 20, 20, 0.25, "F.Cu", 1)
+
+            assert uuid == "track-uuid-123"
+            board.create_items.assert_called_once_with(mock_track)
+            # Verify coordinates converted to nm
+            assert mock_vec.from_xy.call_count == 2
+
+    def test_create_via(self) -> None:
+        """Create a via on the board."""
+        board = _make_mock_board()
+        board.create_items = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        with patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec:
+            mock_vec.from_xy.return_value = MagicMock()
+            with patch("kipy.board.Via") as mock_via_cls:
+                mock_via = MagicMock()
+                mock_via.uuid = "via-uuid-456"
+                mock_via_cls.return_value = mock_via
+
+                uuid = ipc.create_via(15, 15, 0.8, 0.4, ("F.Cu", "B.Cu"), 1)
+
+                assert uuid == "via-uuid-456"
+                board.create_items.assert_called_once_with(mock_via)
+                mock_vec.from_xy.assert_called_once()
+
+    def test_create_zone(self) -> None:
+        """Create a zone on the board."""
+        board = _make_mock_board()
+        board.create_items = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        with patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec:
+            mock_vec.from_xy.return_value = MagicMock()
+            with patch("kipy.board.Zone") as mock_zone_cls:
+                mock_zone = MagicMock()
+                mock_zone.uuid = "zone-uuid-789"
+                mock_zone_cls.return_value = mock_zone
+
+                points = [(0, 0), (10, 0), (10, 10), (0, 10)]
+                uuid = ipc.create_zone(1, "F.Cu", points, priority=0, min_thickness=0.25)
+
+                assert uuid == "zone-uuid-789"
+                board.create_items.assert_called_once_with(mock_zone)
+                # Should convert 4 points
+                assert mock_vec.from_xy.call_count == 4
+
+    def test_refill_zones(self) -> None:
+        """Refill zones on the board."""
+        board = _make_mock_board()
+        board.refill_zones = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        ipc.refill_zones()
+        board.refill_zones.assert_called_once()
+
+    def test_refill_zones_fallback_to_rebuild(self) -> None:
+        """Refill zones falls back to rebuild_zones if refill_zones not available."""
+        board = _make_mock_board()
+        board.rebuild_zones = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+        # Remove refill_zones method
+        del board.refill_zones
+
+        ipc.refill_zones()
+        board.rebuild_zones.assert_called_once()
+
 
 # ── TestIpcToolHandlers ──────────────────────────────────────────────
 
@@ -807,6 +891,115 @@ class TestIpcToolHandlers:
             result = _ipc_get_version_handler()
             assert "error" in result
 
+    def test_create_track_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_create_track_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.create_items = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        mock_track = MagicMock()
+        mock_track.uuid = "track-123"
+        mock_track_cls = MagicMock(return_value=mock_track)
+
+        with (
+            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
+            patch.dict("sys.modules", {"kipy.board": MagicMock(TrackSegment=mock_track_cls)}),
+        ):
+            mock_vec.from_xy.return_value = MagicMock()
+
+            result = _ipc_create_track_handler(10, 10, 20, 20, 0.25, "F.Cu", 1)
+
+            assert result["status"] == "created"
+            assert result["type"] == "track"
+            assert result["uuid"] == "track-123"
+            board.create_items.assert_called_once()
+
+    def test_create_via_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_create_via_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.create_items = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        with (
+            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
+            patch("kipy.board.Via") as mock_via_cls,
+        ):
+            mock_vec.from_xy.return_value = MagicMock()
+            mock_via = MagicMock()
+            mock_via.uuid = "via-456"
+            mock_via_cls.return_value = mock_via
+
+            result = _ipc_create_via_handler(15, 15, 0.8, 0.4, "F.Cu", "B.Cu", 1)
+
+            assert result["status"] == "created"
+            assert result["type"] == "via"
+            assert result["uuid"] == "via-456"
+            board.create_items.assert_called_once()
+
+    def test_create_zone_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_create_zone_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.create_items = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        with (
+            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
+            patch("kipy.board.Zone") as mock_zone_cls,
+        ):
+            mock_vec.from_xy.return_value = MagicMock()
+            mock_zone = MagicMock()
+            mock_zone.uuid = "zone-789"
+            mock_zone_cls.return_value = mock_zone
+
+            result = _ipc_create_zone_handler(
+                1, "F.Cu", "[[0, 0], [10, 0], [10, 10], [0, 10]]", 0, 0.25
+            )
+
+            assert result["status"] == "created"
+            assert result["type"] == "zone"
+            assert result["uuid"] == "zone-789"
+            board.create_items.assert_called_once()
+
+    def test_create_zone_tool_invalid_points(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_create_zone_handler
+
+        ipc = IpcBackend.get()
+        ipc._kicad = _make_mock_kicad()
+        ipc._connected = True
+
+        result = _ipc_create_zone_handler(1, "F.Cu", "not-valid-json", 0, 0.25)
+        assert "error" in result
+
+    def test_refill_zones_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_refill_zones_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.refill_zones = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_refill_zones_handler()
+
+        assert result["status"] == "refilled"
+        board.refill_zones.assert_called_once()
+
+    def test_refill_zones_tool_not_connected(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_refill_zones_handler
+
+        with patch("kicad_mcp.backends.ipc_api._KIPY_AVAILABLE", False):
+            result = _ipc_refill_zones_handler()
+            assert "error" in result
+
 
 # ── TestSessionIpcIntegration ────────────────────────────────────────
 
@@ -1068,6 +1261,100 @@ class TestSessionIpcIntegration:
         # Verify IPC update was called
         assert board.update_items.call_count >= 1
 
+    def test_commit_with_routing_triggers_zone_refill(self, tmp_path: Any) -> None:
+        """Commit with routing changes triggers zone refill."""
+        from kicad_mcp.session import SessionManager
+        from kicad_mcp.sexp import Document
+
+        raw = '(kicad_pcb (version 20240108) (generator "test"))'
+        board_file = tmp_path / "test.kicad_pcb"
+        board_file.write_text(raw)
+
+        doc = Document.load(str(board_file))
+        mgr = SessionManager()
+        session = mgr.start_session(doc)
+
+        # Add a trace
+        mgr.apply_route_trace(session, 10, 10, 20, 20, 0.25, "F.Cu", 1)
+
+        # Set up IPC
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.create_items = MagicMock()
+        board.refill_zones = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        mock_track = MagicMock()
+        mock_track.uuid = "track-123"
+        mock_track_cls = MagicMock(return_value=mock_track)
+
+        with (
+            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
+            patch.dict("sys.modules", {"kipy.board": MagicMock(TrackSegment=mock_track_cls)}),
+        ):
+            mock_vec.from_xy.return_value = MagicMock()
+
+            result = mgr.commit(session)
+
+            assert result["status"] == "committed"
+            # Verify zone refill was called
+            board.refill_zones.assert_called_once()
+
+    def test_parse_segment_snapshot(self) -> None:
+        """Test parsing segment S-expression."""
+        from kicad_mcp.session.manager import SessionManager
+
+        snapshot = (
+            '(segment (start 10 10) (end 20 20) (width 0.25) (layer "F.Cu") (net 1) (uuid "abc"))'
+        )
+        params = SessionManager._parse_segment_snapshot(snapshot)
+
+        assert params is not None
+        assert params["start_x"] == 10.0
+        assert params["start_y"] == 10.0
+        assert params["end_x"] == 20.0
+        assert params["end_y"] == 20.0
+        assert params["width"] == 0.25
+        assert params["layer"] == "F.Cu"
+        assert params["net"] == 1
+
+    def test_parse_via_snapshot(self) -> None:
+        """Test parsing via S-expression."""
+        from kicad_mcp.session.manager import SessionManager
+
+        snapshot = (
+            '(via (at 15 15) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid "def"))'
+        )
+        params = SessionManager._parse_via_snapshot(snapshot)
+
+        assert params is not None
+        assert params["x"] == 15.0
+        assert params["y"] == 15.0
+        assert params["size"] == 0.8
+        assert params["drill"] == 0.4
+        assert params["layer_start"] == "F.Cu"
+        assert params["layer_end"] == "B.Cu"
+        assert params["net"] == 1
+
+    def test_parse_zone_snapshot(self) -> None:
+        """Test parsing zone S-expression."""
+        from kicad_mcp.session.manager import SessionManager
+
+        snapshot = (
+            '(zone (net 1) (layers "F.Cu") (priority 0) '
+            "(polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))))"
+        )
+        params = SessionManager._parse_zone_snapshot(snapshot)
+
+        assert params is not None
+        assert params["net"] == 1
+        assert params["layer"] == "F.Cu"
+        assert params["priority"] == 0
+        assert len(params["outline_points"]) == 4
+        assert params["outline_points"][0] == (0.0, 0.0)
+        assert params["outline_points"][3] == (0.0, 10.0)
+
 
 # ── TestToolRegistration ─────────────────────────────────────────────
 
@@ -1089,6 +1376,10 @@ class TestToolRegistration:
             "ipc_get_zones",
             "ipc_ping",
             "ipc_get_version",
+            "ipc_create_track",
+            "ipc_create_via",
+            "ipc_create_zone",
+            "ipc_refill_zones",
         ]
         for name in ipc_tools:
             assert name in TOOL_REGISTRY, f"Tool {name!r} not registered"
@@ -1107,4 +1398,4 @@ class TestToolRegistration:
 
         cats = get_categories()
         assert "ipc_sync" in cats
-        assert len(cats["ipc_sync"]) == 10  # Updated from 5 to 10
+        assert len(cats["ipc_sync"]) == 14  # Updated: 10 + 4 new routing tools
