@@ -14,7 +14,7 @@ def _export_gerbers_handler(output_dir: str) -> dict[str, Any]:
         output_dir: Directory to save Gerber files.
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -25,12 +25,15 @@ def _export_gerbers_handler(output_dir: str) -> dict[str, Any]:
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+."}
 
-    result = cli.export_gerbers(board_path, output_dir)
-    d = result.to_dict()
+    try:
+        result = cli.export_gerbers(board_path, output_dir)
+        d = result.to_dict()
 
-    # Also export drill files alongside gerbers
-    drill_result = cli.export_drill(board_path, output_dir)
-    d["drill"] = drill_result.to_dict()
+        # Also export drill files alongside gerbers
+        drill_result = cli.export_drill(board_path, output_dir)
+        d["drill"] = drill_result.to_dict()
+    except KiCadCliError as e:
+        return {"error": f"Gerber export failed: {e}"}
 
     return d
 
@@ -43,7 +46,7 @@ def _export_pdf_handler(output_path: str, layers: str | None = None) -> dict[str
         layers: Comma-separated layer names (e.g., 'F.Cu,B.Cu,Edge.Cuts'). All layers if omitted.
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -54,8 +57,11 @@ def _export_pdf_handler(output_path: str, layers: str | None = None) -> dict[str
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+."}
 
-    layer_list = [lyr.strip() for lyr in layers.split(",")] if layers else None
-    result = cli.export_pdf(board_path, output_path, layers=layer_list)
+    try:
+        layer_list = [lyr.strip() for lyr in layers.split(",")] if layers else None
+        result = cli.export_pdf(board_path, output_path, layers=layer_list)
+    except KiCadCliError as e:
+        return {"error": f"PDF export failed: {e}"}
     return result.to_dict()
 
 
@@ -67,7 +73,7 @@ def _export_svg_handler(output_path: str, layers: str | None = None) -> dict[str
         layers: Comma-separated layer names. All layers if omitted.
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -78,8 +84,11 @@ def _export_svg_handler(output_path: str, layers: str | None = None) -> dict[str
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+."}
 
-    layer_list = [lyr.strip() for lyr in layers.split(",")] if layers else None
-    result = cli.export_svg(board_path, output_path, layers=layer_list)
+    try:
+        layer_list = [lyr.strip() for lyr in layers.split(",")] if layers else None
+        result = cli.export_svg(board_path, output_path, layers=layer_list)
+    except KiCadCliError as e:
+        return {"error": f"SVG export failed: {e}"}
     return result.to_dict()
 
 
@@ -90,7 +99,7 @@ def _export_step_handler(output_path: str) -> dict[str, Any]:
         output_path: Path for the output STEP file.
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -101,7 +110,10 @@ def _export_step_handler(output_path: str) -> dict[str, Any]:
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+."}
 
-    result = cli.export_step(board_path, output_path)
+    try:
+        result = cli.export_step(board_path, output_path)
+    except KiCadCliError as e:
+        return {"error": f"STEP export failed: {e}"}
     return result.to_dict()
 
 
@@ -113,7 +125,7 @@ def _export_pos_handler(output_path: str, side: str = "both") -> dict[str, Any]:
         side: Board side: 'front', 'back', or 'both'.
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -124,7 +136,10 @@ def _export_pos_handler(output_path: str, side: str = "both") -> dict[str, Any]:
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+."}
 
-    result = cli.export_pos(board_path, output_path, side=side)
+    try:
+        result = cli.export_pos(board_path, output_path, side=side)
+    except KiCadCliError as e:
+        return {"error": f"Position file export failed: {e}"}
     return result.to_dict()
 
 
@@ -231,7 +246,7 @@ def _export_vrml_handler(output_path: str) -> dict[str, Any]:
         output_path: Path for the output VRML file (.wrl).
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -242,7 +257,10 @@ def _export_vrml_handler(output_path: str) -> dict[str, Any]:
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+."}
 
-    result = cli.export_vrml(board_path, output_path)
+    try:
+        result = cli.export_vrml(board_path, output_path)
+    except KiCadCliError as e:
+        return {"error": f"VRML export failed: {e}"}
     return result.to_dict()
 
 

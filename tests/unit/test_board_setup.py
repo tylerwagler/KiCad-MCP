@@ -97,9 +97,7 @@ class TestAddBoardOutline:
         edge_cuts = [
             c
             for c in session._working_doc.root.children
-            if c.name == "gr_line"
-            and c.get("layer")
-            and c.get("layer").first_value == "Edge.Cuts"
+            if c.name == "gr_line" and c.get("layer") and c.get("layer").first_value == "Edge.Cuts"
         ]
         # Should have exactly 3 segments (previous edges cleared)
         assert len(edge_cuts) == 3
@@ -115,9 +113,7 @@ class TestAddBoardOutline:
         edge_cuts = [
             c
             for c in session._working_doc.root.children
-            if c.name == "gr_line"
-            and c.get("layer")
-            and c.get("layer").first_value == "Edge.Cuts"
+            if c.name == "gr_line" and c.get("layer") and c.get("layer").first_value == "Edge.Cuts"
         ]
         # Should have exactly 4 from add_board_outline (not 8 from both)
         assert len(edge_cuts) == 4
@@ -130,9 +126,7 @@ class TestAddBoardOutline:
         edges_after_size = [
             c
             for c in session._working_doc.root.children
-            if c.name == "gr_line"
-            and c.get("layer")
-            and c.get("layer").first_value == "Edge.Cuts"
+            if c.name == "gr_line" and c.get("layer") and c.get("layer").first_value == "Edge.Cuts"
         ]
         assert len(edges_after_size) == 4
 
@@ -141,9 +135,7 @@ class TestAddBoardOutline:
         edges_after_outline = [
             c
             for c in session._working_doc.root.children
-            if c.name == "gr_line"
-            and c.get("layer")
-            and c.get("layer").first_value == "Edge.Cuts"
+            if c.name == "gr_line" and c.get("layer") and c.get("layer").first_value == "Edge.Cuts"
         ]
         assert len(edges_after_outline) == 3
 
@@ -152,9 +144,7 @@ class TestAddBoardOutline:
         edges_after_undo = [
             c
             for c in session._working_doc.root.children
-            if c.name == "gr_line"
-            and c.get("layer")
-            and c.get("layer").first_value == "Edge.Cuts"
+            if c.name == "gr_line" and c.get("layer") and c.get("layer").first_value == "Edge.Cuts"
         ]
         assert len(edges_after_undo) == 4
 
@@ -307,9 +297,7 @@ class TestDesignRules:
 
     def test_set_solder_mask_min_width(self) -> None:
         mgr, session = self._make_session()
-        record = mgr.apply_set_design_rules(
-            session, {"solder_mask_min_width": 0.05}
-        )
+        record = mgr.apply_set_design_rules(session, {"solder_mask_min_width": 0.05})
         assert record.applied
 
         setup = session._working_doc.root.get("setup")
@@ -319,9 +307,7 @@ class TestDesignRules:
 
     def test_set_paste_clearance(self) -> None:
         mgr, session = self._make_session()
-        record = mgr.apply_set_design_rules(
-            session, {"pad_to_paste_clearance": 0.02}
-        )
+        record = mgr.apply_set_design_rules(session, {"pad_to_paste_clearance": 0.02})
         assert record.applied
 
     def test_alias_min_clearance(self) -> None:

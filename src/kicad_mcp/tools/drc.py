@@ -14,7 +14,7 @@ def _run_drc_handler(output_path: str | None = None) -> dict[str, Any]:
         output_path: Optional path to save the DRC report JSON.
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -25,7 +25,10 @@ def _run_drc_handler(output_path: str | None = None) -> dict[str, Any]:
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+ to use DRC."}
 
-    result = cli.run_drc(board_path, output_path=output_path)
+    try:
+        result = cli.run_drc(board_path, output_path=output_path)
+    except KiCadCliError as e:
+        return {"error": f"DRC failed: {e}"}
     return result.to_dict()
 
 
@@ -36,7 +39,7 @@ def _get_drc_violations_handler(severity: str = "all") -> dict[str, Any]:
         severity: Filter by severity: 'all', 'error', or 'warning'.
     """
     from .. import state
-    from ..backends.kicad_cli import KiCadCli, KiCadCliNotFound
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
     board_path = state.get_board_path()
     if not board_path:
@@ -47,7 +50,10 @@ def _get_drc_violations_handler(severity: str = "all") -> dict[str, Any]:
     except KiCadCliNotFound:
         return {"error": "kicad-cli not found. Install KiCad 8+ to use DRC."}
 
-    result = cli.run_drc(board_path)
+    try:
+        result = cli.run_drc(board_path)
+    except KiCadCliError as e:
+        return {"error": f"DRC failed: {e}"}
     violations = result.violations
 
     if severity != "all":

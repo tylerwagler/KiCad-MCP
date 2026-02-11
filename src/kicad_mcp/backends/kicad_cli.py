@@ -9,9 +9,11 @@ with timeouts and command validation.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -61,6 +63,20 @@ class KiCadCli:
             if Path(path).is_file():
                 return path
 
+        # Glob fallback — find versioned installations (e.g. 9.0.2, 9.1)
+        _GLOB_PATTERNS: list[str] = []
+        if sys.platform == "win32":
+            _GLOB_PATTERNS.append(r"C:\Program Files\KiCad\*\bin\kicad-cli.exe")
+        elif sys.platform == "darwin":
+            _GLOB_PATTERNS.append("/Applications/KiCad/KiCad*.app/Contents/MacOS/kicad-cli")
+        else:
+            _GLOB_PATTERNS.append("/usr/lib/kicad/*/bin/kicad-cli")
+
+        for pattern in _GLOB_PATTERNS:
+            matches = sorted(glob.glob(pattern), reverse=True)
+            if matches:
+                return matches[0]
+
         raise KiCadCliNotFound("kicad-cli not found. Install KiCad 8+ or set the path manually.")
 
     def _run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -78,6 +94,25 @@ class KiCadCli:
             raise KiCadCliError(f"kicad-cli timed out after {self.timeout}s") from e
         except FileNotFoundError as e:
             raise KiCadCliNotFound(f"kicad-cli not found at {self.cli_path}") from e
+
+    def _format_error(
+        self,
+        result: subprocess.CompletedProcess[str],
+        fallback_message: str,
+    ) -> str:
+        """Build a rich error message from a failed kicad-cli invocation.
+
+        Combines the CLI path, full command, exit code, and any stderr/stdout
+        output into a single diagnostic string.
+        """
+        cmd_str = " ".join(result.args) if isinstance(result.args, list) else str(result.args)
+        output = result.stderr.strip() or result.stdout.strip() or fallback_message
+        return (
+            f"{output}\n"
+            f"  command: {cmd_str}\n"
+            f"  exit code: {result.returncode}\n"
+            f"  cli path: {self.cli_path}"
+        )
 
     @staticmethod
     def is_available() -> bool:
@@ -137,9 +172,7 @@ class KiCadCli:
             report = json.loads(Path(output_path).read_text(encoding="utf-8"))
         except (json.JSONDecodeError, FileNotFoundError):
             # JSON not produced — kicad-cli likely failed to run DRC
-            stderr = result.stderr.strip()
-            stdout = result.stdout.strip()
-            message = stderr or stdout or "kicad-cli produced no DRC report"
+            message = self._format_error(result, "kicad-cli produced no DRC report")
             return DrcResult(
                 passed=False,
                 error_count=0,
@@ -151,9 +184,7 @@ class KiCadCli:
         return self._parse_drc_report(report, output_path, result.stderr.strip())
 
     @staticmethod
-    def _parse_drc_report(
-        report: dict[str, Any], report_path: str, stderr: str = ""
-    ) -> DrcResult:
+    def _parse_drc_report(report: dict[str, Any], report_path: str, stderr: str = "") -> DrcResult:
         """Parse a kicad-cli DRC JSON report into a DrcResult."""
         violations: list[DrcViolation] = []
         error_count = 0
@@ -243,7 +274,7 @@ class KiCadCli:
             return ExportResult(
                 success=False,
                 output_path=output_dir,
-                message=result.stderr.strip() or "Gerber export failed",
+                message=self._format_error(result, "Gerber export failed"),
             )
 
         return ExportResult(
@@ -282,7 +313,7 @@ class KiCadCli:
             return ExportResult(
                 success=False,
                 output_path=output_dir,
-                message=result.stderr.strip() or "Drill export failed",
+                message=self._format_error(result, "Drill export failed"),
             )
 
         return ExportResult(
@@ -328,7 +359,7 @@ class KiCadCli:
             return ExportResult(
                 success=False,
                 output_path=output_path,
-                message=result.stderr.strip() or "PDF export failed",
+                message=self._format_error(result, "PDF export failed"),
             )
 
         return ExportResult(
@@ -374,7 +405,7 @@ class KiCadCli:
             return ExportResult(
                 success=False,
                 output_path=output_path,
-                message=result.stderr.strip() or "SVG export failed",
+                message=self._format_error(result, "SVG export failed"),
             )
 
         return ExportResult(
@@ -413,7 +444,7 @@ class KiCadCli:
             return ExportResult(
                 success=False,
                 output_path=output_path,
-                message=result.stderr.strip() or "STEP export failed",
+                message=self._format_error(result, "STEP export failed"),
             )
 
         return ExportResult(
@@ -452,7 +483,7 @@ class KiCadCli:
             return ExportResult(
                 success=False,
                 output_path=output_path,
-                message=result.stderr.strip() or "VRML export failed",
+                message=self._format_error(result, "VRML export failed"),
             )
 
         return ExportResult(
@@ -497,7 +528,7 @@ class KiCadCli:
             return ExportResult(
                 success=False,
                 output_path=output_path,
-                message=result.stderr.strip() or "Position file export failed",
+                message=self._format_error(result, "Position file export failed"),
             )
 
         return ExportResult(

@@ -68,9 +68,7 @@ class TestParseDrcReport:
             ],
             "unconnected_items": [],
         }
-        result = KiCadCli._parse_drc_report(
-            report, "/tmp/test.json", stderr="some stderr noise"
-        )
+        result = KiCadCli._parse_drc_report(report, "/tmp/test.json", stderr="some stderr noise")
         assert result.message == ""
 
 
