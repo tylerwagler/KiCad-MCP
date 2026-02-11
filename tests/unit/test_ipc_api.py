@@ -622,6 +622,132 @@ class TestIpcOperations:
         ipc.refill_zones()
         board.rebuild_zones.assert_called_once()
 
+    def test_get_board_stackup(self) -> None:
+        """Get board stackup information."""
+        board = _make_mock_board()
+        board.get_copper_layer_count = MagicMock(return_value=4)
+        ipc, _ = self._connect_with_mock(board)
+
+        result = ipc.get_board_stackup()
+        assert result["layer_count"] == 4
+
+    def test_get_copper_layer_count(self) -> None:
+        """Get copper layer count."""
+        board = _make_mock_board()
+        board.get_copper_layer_count = MagicMock(return_value=6)
+        ipc, _ = self._connect_with_mock(board)
+
+        count = ipc.get_copper_layer_count()
+        assert count == 6
+
+    def test_get_net_classes(self) -> None:
+        """Get net class definitions."""
+        board = _make_mock_board()
+        mock_nc = MagicMock()
+        mock_nc.name = "Power"
+        mock_nc.clearance = 250000  # 0.25mm in nm
+        mock_nc.track_width = 500000  # 0.5mm in nm
+        board.get_net_classes = MagicMock(return_value=[mock_nc])
+        ipc, _ = self._connect_with_mock(board)
+
+        result = ipc.get_net_classes()
+        assert len(result) == 1
+        assert result[0]["name"] == "Power"
+        assert result[0]["clearance"] == 0.25
+        assert result[0]["width"] == 0.5
+
+    def test_get_title_block_info(self) -> None:
+        """Get title block information."""
+        board = _make_mock_board()
+        mock_tb = MagicMock()
+        mock_tb.title = "My Project"
+        mock_tb.revision = "v1.0"
+        mock_tb.company = "Acme Corp"
+        board.title_block = mock_tb
+        ipc, _ = self._connect_with_mock(board)
+
+        result = ipc.get_title_block_info()
+        assert result["title"] == "My Project"
+        assert result["revision"] == "v1.0"
+        assert result["company"] == "Acme Corp"
+
+    def test_get_text_variables(self) -> None:
+        """Get text variables."""
+        board = _make_mock_board()
+        board.get_text_variables = MagicMock(
+            return_value={"REVISION": "v1.0", "DATE": "2026-02-10"}
+        )
+        ipc, _ = self._connect_with_mock(board)
+
+        result = ipc.get_text_variables()
+        assert result["REVISION"] == "v1.0"
+        assert result["DATE"] == "2026-02-10"
+
+    def test_set_text_variables(self) -> None:
+        """Set text variables."""
+        board = _make_mock_board()
+        board.set_text_variables = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        ipc.set_text_variables({"REVISION": "v1.1"})
+        board.set_text_variables.assert_called_once_with({"REVISION": "v1.1"})
+
+    def test_save_board(self) -> None:
+        """Save board via IPC."""
+        board = _make_mock_board()
+        board.save = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        ipc.save_board()
+        board.save.assert_called_once()
+
+    def test_revert_board(self) -> None:
+        """Revert board to last saved state."""
+        board = _make_mock_board()
+        board.revert = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        ipc.revert_board()
+        board.revert.assert_called_once()
+
+    def test_revert_board_fallback_to_reload(self) -> None:
+        """Revert falls back to reload if revert not available."""
+        board = _make_mock_board()
+        # Remove revert method to test fallback
+        del board.revert
+        board.reload = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        ipc.revert_board()
+        board.reload.assert_called_once()
+
+    def test_get_active_layer(self) -> None:
+        """Get active layer from GUI."""
+        board = _make_mock_board()
+        board.get_active_layer = MagicMock(return_value=0)  # F.Cu layer int
+        ipc, _ = self._connect_with_mock(board)
+
+        layer = ipc.get_active_layer()
+        assert isinstance(layer, str)
+
+    def test_set_active_layer(self) -> None:
+        """Set active layer in GUI."""
+        board = _make_mock_board()
+        board.set_active_layer = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        ipc.set_active_layer("F.Cu")
+        board.set_active_layer.assert_called_once()
+
+    def test_set_visible_layers(self) -> None:
+        """Set visible layers in GUI."""
+        board = _make_mock_board()
+        board.set_visible_layers = MagicMock()
+        ipc, _ = self._connect_with_mock(board)
+
+        ipc.set_visible_layers(["F.Cu", "B.Cu"])
+        board.set_visible_layers.assert_called_once_with(["F.Cu", "B.Cu"])
+
 
 # ── TestIpcToolHandlers ──────────────────────────────────────────────
 
@@ -999,6 +1125,134 @@ class TestIpcToolHandlers:
         with patch("kicad_mcp.backends.ipc_api._KIPY_AVAILABLE", False):
             result = _ipc_refill_zones_handler()
             assert "error" in result
+
+    def test_get_stackup_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_stackup_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.get_copper_layer_count = MagicMock(return_value=4)
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_stackup_handler()
+        assert result["layer_count"] == 4
+
+    def test_get_net_classes_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_net_classes_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.get_net_classes = MagicMock(return_value=[])
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_net_classes_handler()
+        assert "net_classes" in result
+        assert result["count"] == 0
+
+    def test_get_title_block_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_title_block_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        mock_tb = MagicMock()
+        mock_tb.title = "Test"
+        board.title_block = mock_tb
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_title_block_handler()
+        assert result["title"] == "Test"
+
+    def test_get_text_vars_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_text_vars_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.get_text_variables = MagicMock(return_value={"VAR": "value"})
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_text_vars_handler()
+        assert result["variables"]["VAR"] == "value"
+
+    def test_set_text_vars_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_set_text_vars_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.set_text_variables = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_set_text_vars_handler('{"VAR": "value"}')
+        assert result["status"] == "updated"
+        board.set_text_variables.assert_called_once()
+
+    def test_save_board_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_save_board_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.save = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_save_board_handler()
+        assert result["status"] == "saved"
+        board.save.assert_called_once()
+
+    def test_revert_board_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_revert_board_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.revert = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_revert_board_handler()
+        assert result["status"] == "reverted"
+        board.revert.assert_called_once()
+
+    def test_get_active_layer_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_active_layer_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.get_active_layer = MagicMock(return_value=0)
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_active_layer_handler()
+        assert "layer" in result
+
+    def test_set_active_layer_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_set_active_layer_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.set_active_layer = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_set_active_layer_handler("F.Cu")
+        assert result["status"] == "updated"
+        board.set_active_layer.assert_called_once()
+
+    def test_set_visible_layers_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_set_visible_layers_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        board.set_visible_layers = MagicMock()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_set_visible_layers_handler('["F.Cu", "B.Cu"]')
+        assert result["status"] == "updated"
+        board.set_visible_layers.assert_called_once()
 
 
 # ── TestSessionIpcIntegration ────────────────────────────────────────
@@ -1380,6 +1634,16 @@ class TestToolRegistration:
             "ipc_create_via",
             "ipc_create_zone",
             "ipc_refill_zones",
+            "ipc_get_stackup",
+            "ipc_get_net_classes",
+            "ipc_get_title_block",
+            "ipc_get_text_vars",
+            "ipc_set_text_vars",
+            "ipc_save_board",
+            "ipc_revert_board",
+            "ipc_get_active_layer",
+            "ipc_set_active_layer",
+            "ipc_set_visible_layers",
         ]
         for name in ipc_tools:
             assert name in TOOL_REGISTRY, f"Tool {name!r} not registered"
@@ -1398,4 +1662,4 @@ class TestToolRegistration:
 
         cats = get_categories()
         assert "ipc_sync" in cats
-        assert len(cats["ipc_sync"]) == 14  # Updated: 10 + 4 new routing tools
+        assert len(cats["ipc_sync"]) == 24  # Phase 1: 10, Phase 2: +4, Phase 3: +10

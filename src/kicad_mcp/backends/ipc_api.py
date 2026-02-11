@@ -150,11 +150,42 @@ class IpcBackend:
 
     @staticmethod
     def _nm_to_mm(nm: float) -> float:
-        return nm / 1_000_000
+        """Convert nanometers to millimeters.
+
+        Uses kipy.util.units if available, falls back to manual conversion.
+        """
+        try:
+            from kipy.util.units import to_mm  # type: ignore[import-untyped]
+
+            return to_mm(nm)
+        except ImportError:
+            return nm / 1_000_000
 
     @staticmethod
     def _mm_to_nm(mm: float) -> int:
-        return int(mm * 1_000_000)
+        """Convert millimeters to nanometers.
+
+        Uses kipy.util.units if available, falls back to manual conversion.
+        """
+        try:
+            from kipy.util.units import from_mm  # type: ignore[import-untyped]
+
+            return from_mm(mm)
+        except ImportError:
+            return int(mm * 1_000_000)
+
+    @staticmethod
+    def _layer_name(layer_int: int) -> str:
+        """Convert layer int enum to canonical layer name.
+
+        Uses kipy.util.board_layer if available, falls back to string conversion.
+        """
+        try:
+            from kipy.util.board_layer import canonical_name  # type: ignore[import-untyped]
+
+            return canonical_name(layer_int)
+        except ImportError:
+            return str(layer_int)
 
     # ── Read operations ─────────────────────────────────────────────
 
@@ -197,7 +228,7 @@ class IpcBackend:
                         "y": self._nm_to_mm(fp.position.y),
                     },
                     "rotation": fp.orientation.degrees if hasattr(fp, "orientation") else 0,
-                    "layer": str(fp.layer) if hasattr(fp, "layer") else "",
+                    "layer": self._layer_name(fp.layer) if hasattr(fp, "layer") else "",
                 }
                 for fp in footprints
             ]
@@ -569,6 +600,231 @@ class IpcBackend:
                 board.rebuild_zones()
         except Exception as exc:
             raise IpcError(f"Failed to refill zones: {exc}") from exc
+
+    # ── Metadata operations ─────────────────────────────────────────
+
+    def get_board_stackup(self) -> dict[str, Any]:
+        """Get layer stackup information.
+
+        Returns:
+            Dict with: layer_count, layers (list of layer info dicts)
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            layer_count = 2  # Default to 2-layer
+
+            if hasattr(board, "get_copper_layer_count"):
+                layer_count = board.get_copper_layer_count()
+            elif hasattr(board, "copper_layer_count"):
+                layer_count = board.copper_layer_count
+
+            layers = []
+            if hasattr(board, "get_board_stackup"):
+                stackup = board.get_board_stackup()
+                for layer in stackup:
+                    layers.append(
+                        {
+                            "name": str(layer.name) if hasattr(layer, "name") else "",
+                            "type": str(layer.type) if hasattr(layer, "type") else "",
+                            "thickness": layer.thickness if hasattr(layer, "thickness") else 0,
+                        }
+                    )
+
+            return {"layer_count": layer_count, "layers": layers}
+        except Exception as exc:
+            raise IpcError(f"Failed to get board stackup: {exc}") from exc
+
+    def get_copper_layer_count(self) -> int:
+        """Get number of copper layers (2, 4, 6, etc.).
+
+        Returns:
+            Number of copper layers.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "get_copper_layer_count"):
+                return board.get_copper_layer_count()
+            if hasattr(board, "copper_layer_count"):
+                return board.copper_layer_count
+            return 2  # Default fallback
+        except Exception as exc:
+            raise IpcError(f"Failed to get copper layer count: {exc}") from exc
+
+    def get_net_classes(self) -> list[dict[str, Any]]:
+        """Get net class definitions.
+
+        Returns:
+            List of net class dicts with: name, clearance, width, via_size, via_drill, nets
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            net_classes = []
+
+            if hasattr(board, "get_net_classes"):
+                for nc in board.get_net_classes():
+                    entry: dict[str, Any] = {"name": str(nc.name) if hasattr(nc, "name") else ""}
+                    if hasattr(nc, "clearance"):
+                        entry["clearance"] = self._nm_to_mm(nc.clearance)
+                    if hasattr(nc, "track_width"):
+                        entry["width"] = self._nm_to_mm(nc.track_width)
+                    if hasattr(nc, "via_size"):
+                        entry["via_size"] = self._nm_to_mm(nc.via_size)
+                    if hasattr(nc, "via_drill"):
+                        entry["via_drill"] = self._nm_to_mm(nc.via_drill)
+                    if hasattr(nc, "nets"):
+                        entry["nets"] = [str(n) for n in nc.nets]
+                    net_classes.append(entry)
+
+            return net_classes
+        except Exception as exc:
+            raise IpcError(f"Failed to get net classes: {exc}") from exc
+
+    def get_title_block_info(self) -> dict[str, Any]:
+        """Get title block fields.
+
+        Returns:
+            Dict with: title, revision, date, company, comment1-9
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            info: dict[str, Any] = {}
+
+            if hasattr(board, "title_block") or hasattr(board, "get_title_block"):
+                tb = board.title_block if hasattr(board, "title_block") else board.get_title_block()
+                if hasattr(tb, "title"):
+                    info["title"] = str(tb.title)
+                if hasattr(tb, "revision"):
+                    info["revision"] = str(tb.revision)
+                if hasattr(tb, "date"):
+                    info["date"] = str(tb.date)
+                if hasattr(tb, "company"):
+                    info["company"] = str(tb.company)
+                # Comments
+                for i in range(1, 10):
+                    comment_attr = f"comment{i}"
+                    if hasattr(tb, comment_attr):
+                        info[comment_attr] = str(getattr(tb, comment_attr))
+
+            return info
+        except Exception as exc:
+            raise IpcError(f"Failed to get title block info: {exc}") from exc
+
+    def get_text_variables(self) -> dict[str, str]:
+        """Get project text variables like ${REVISION}, ${DATE}.
+
+        Returns:
+            Dict mapping variable names to values.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            variables: dict[str, str] = {}
+
+            if hasattr(board, "get_text_variables"):
+                vars_dict = board.get_text_variables()
+                for key, value in vars_dict.items():
+                    variables[str(key)] = str(value)
+
+            return variables
+        except Exception as exc:
+            raise IpcError(f"Failed to get text variables: {exc}") from exc
+
+    def set_text_variables(self, variables: dict[str, str]) -> None:
+        """Set project text variables.
+
+        Args:
+            variables: Dict mapping variable names to values.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "set_text_variables"):
+                board.set_text_variables(variables)
+        except Exception as exc:
+            raise IpcError(f"Failed to set text variables: {exc}") from exc
+
+    # ── Board operations ────────────────────────────────────────────
+
+    def save_board(self) -> None:
+        """Save board via IPC (no kicad-cli needed)."""
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "save"):
+                board.save()
+            else:
+                raise IpcError("Board save not supported by this KiCad version")
+        except IpcError:
+            raise
+        except Exception as exc:
+            raise IpcError(f"Failed to save board: {exc}") from exc
+
+    def revert_board(self) -> None:
+        """Revert board to last saved state."""
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "revert"):
+                board.revert()
+            elif hasattr(board, "reload"):
+                board.reload()
+            else:
+                raise IpcError("Board revert not supported by this KiCad version")
+        except IpcError:
+            raise
+        except Exception as exc:
+            raise IpcError(f"Failed to revert board: {exc}") from exc
+
+    # ── GUI control ─────────────────────────────────────────────────
+
+    def get_active_layer(self) -> str:
+        """Get currently active layer in GUI.
+
+        Returns:
+            Layer name (e.g., "F.Cu", "B.Cu").
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "get_active_layer"):
+                layer_int = board.get_active_layer()
+                return self._layer_name(layer_int)
+            return ""
+        except Exception as exc:
+            raise IpcError(f"Failed to get active layer: {exc}") from exc
+
+    def set_active_layer(self, layer: str) -> None:
+        """Set active layer in GUI.
+
+        Args:
+            layer: Layer name (e.g., "F.Cu", "B.Cu").
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "set_active_layer"):
+                # May need to convert layer name to int enum
+                board.set_active_layer(layer)  # type: ignore[arg-type]
+        except Exception as exc:
+            raise IpcError(f"Failed to set active layer: {exc}") from exc
+
+    def set_visible_layers(self, layers: list[str]) -> None:
+        """Control layer visibility in GUI.
+
+        Args:
+            layers: List of layer names to make visible.
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            if hasattr(board, "set_visible_layers"):
+                board.set_visible_layers(layers)
+        except Exception as exc:
+            raise IpcError(f"Failed to set visible layers: {exc}") from exc
 
     def move_footprint(self, reference: str, x: float, y: float) -> None:
         """Move a footprint to a new position in KiCad GUI."""

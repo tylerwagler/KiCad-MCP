@@ -488,6 +488,222 @@ def _ipc_refill_zones_handler() -> dict[str, Any]:
         return _ipc_error_response(exc)
 
 
+# ── Metadata handlers ────────────────────────────────────────────
+
+
+def _ipc_get_stackup_handler() -> dict[str, Any]:
+    """Get board layer stackup information.
+
+    Returns layer count and stackup details.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        return ipc.get_board_stackup()
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_get_net_classes_handler() -> dict[str, Any]:
+    """Get net class definitions from the board.
+
+    Returns clearance, width, via settings for each net class.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        net_classes = ipc.get_net_classes()
+        return {"net_classes": net_classes, "count": len(net_classes)}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_get_title_block_handler() -> dict[str, Any]:
+    """Get title block fields from the board.
+
+    Returns title, revision, date, company, and comments.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        return ipc.get_title_block_info()
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_get_text_vars_handler() -> dict[str, Any]:
+    """Get project text variables.
+
+    Returns variables like ${REVISION}, ${DATE}, etc.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        variables = ipc.get_text_variables()
+        return {"variables": variables, "count": len(variables)}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_set_text_vars_handler(variables: str) -> dict[str, Any]:
+    """Set project text variables.
+
+    Args:
+        variables: JSON object mapping variable names to values
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    # Parse variables from JSON string
+    import json
+
+    try:
+        vars_dict = json.loads(variables)
+    except json.JSONDecodeError as exc:
+        return {"error": f"Invalid variables format: {exc}"}
+
+    ipc = _get_ipc()
+    try:
+        ipc.set_text_variables(vars_dict)
+        return {"status": "updated", "count": len(vars_dict)}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+# ── Board operation handlers ─────────────────────────────────────
+
+
+def _ipc_save_board_handler() -> dict[str, Any]:
+    """Save board via IPC.
+
+    Saves the board without needing kicad-cli.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        ipc.save_board()
+        return {"status": "saved", "message": "Board saved successfully"}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_revert_board_handler() -> dict[str, Any]:
+    """Revert board to last saved state.
+
+    Discards all unsaved changes in KiCad GUI.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        ipc.revert_board()
+        return {"status": "reverted", "message": "Board reverted to last saved state"}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+# ── GUI control handlers ─────────────────────────────────────────
+
+
+def _ipc_get_active_layer_handler() -> dict[str, Any]:
+    """Get currently active layer in KiCad GUI.
+
+    Returns the layer name (e.g., 'F.Cu', 'B.Cu').
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        layer = ipc.get_active_layer()
+        return {"layer": layer}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_set_active_layer_handler(layer: str) -> dict[str, Any]:
+    """Set active layer in KiCad GUI.
+
+    Args:
+        layer: Layer name (e.g., 'F.Cu', 'B.Cu')
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        ipc.set_active_layer(layer)
+        return {"status": "updated", "layer": layer}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_set_visible_layers_handler(layers: str) -> dict[str, Any]:
+    """Control layer visibility in KiCad GUI.
+
+    Args:
+        layers: JSON array of layer names to make visible
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    # Parse layers from JSON string
+    import json
+
+    try:
+        layers_list = json.loads(layers)
+    except json.JSONDecodeError as exc:
+        return {"error": f"Invalid layers format: {exc}"}
+
+    ipc = _get_ipc()
+    try:
+        ipc.set_visible_layers(layers_list)
+        return {"status": "updated", "count": len(layers_list)}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
 # ── Tool Registration ───────────────────────────────────────────────
 
 register_tool(
@@ -697,5 +913,109 @@ register_tool(
     ),
     parameters={},
     handler=_ipc_refill_zones_handler,
+    category="ipc_sync",
+)
+
+# ── Metadata tools ───────────────────────────────────────────────
+
+register_tool(
+    name="ipc_get_stackup",
+    description="Get board layer stackup information (layer count, names, types, thickness).",
+    parameters={},
+    handler=_ipc_get_stackup_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_get_net_classes",
+    description=(
+        "Get net class definitions from the board. "
+        "Returns clearance, width, via settings for each net class."
+    ),
+    parameters={},
+    handler=_ipc_get_net_classes_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_get_title_block",
+    description="Get title block fields (title, revision, date, company, comments).",
+    parameters={},
+    handler=_ipc_get_title_block_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_get_text_vars",
+    description="Get project text variables like ${REVISION}, ${DATE}.",
+    parameters={},
+    handler=_ipc_get_text_vars_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_set_text_vars",
+    description="Set project text variables.",
+    parameters={
+        "variables": {
+            "type": "string",
+            "description": "JSON object mapping variable names to values",
+        },
+    },
+    handler=_ipc_set_text_vars_handler,
+    category="ipc_sync",
+)
+
+# ── Board operation tools ────────────────────────────────────────
+
+register_tool(
+    name="ipc_save_board",
+    description="Save board via IPC without needing kicad-cli.",
+    parameters={},
+    handler=_ipc_save_board_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_revert_board",
+    description="Revert board to last saved state. Discards all unsaved changes in KiCad GUI.",
+    parameters={},
+    handler=_ipc_revert_board_handler,
+    category="ipc_sync",
+)
+
+# ── GUI control tools ────────────────────────────────────────────
+
+register_tool(
+    name="ipc_get_active_layer",
+    description="Get currently active layer in KiCad GUI.",
+    parameters={},
+    handler=_ipc_get_active_layer_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_set_active_layer",
+    description="Set active layer in KiCad GUI.",
+    parameters={
+        "layer": {
+            "type": "string",
+            "description": "Layer name (e.g., 'F.Cu', 'B.Cu')",
+        },
+    },
+    handler=_ipc_set_active_layer_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_set_visible_layers",
+    description="Control layer visibility in KiCad GUI.",
+    parameters={
+        "layers": {
+            "type": "string",
+            "description": "JSON array of layer names to make visible",
+        },
+    },
+    handler=_ipc_set_visible_layers_handler,
     category="ipc_sync",
 )
