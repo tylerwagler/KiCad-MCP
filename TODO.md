@@ -1,7 +1,7 @@
 # KiCad MCP — TODO
 
 ## Current State
-- 75 tools, 360 tests, 100% pass, 12 categories
+- 90 tools, 577 tests, 100% pass, 14 categories
 - Full feature parity with old Node.js server (which had 78% pass rate)
 - Best-in-class among 6 competing KiCad MCP repos
 - CI pipeline (GitHub Actions), integration tests, performance benchmarks
@@ -11,10 +11,10 @@
 ## Remaining Gaps (from competitive analysis)
 
 ### KiCad IPC API Integration
-- [ ] Wire up `backends/ipc_api.py` for real-time KiCad UI sync (KiCad 9+ only)
-- [ ] Live board state push/pull without file round-trips
-- [ ] Highlight components in KiCad GUI from MCP commands
-- [ ] Bi-directional selection sync (click in KiCad -> MCP knows, MCP selects -> KiCad highlights)
+- [x] Wire up `backends/ipc_api.py` for real-time KiCad UI sync (KiCad 9+ only)
+- [x] Live board state push/pull without file round-trips
+- [x] Highlight components in KiCad GUI from MCP commands
+- [x] Bi-directional selection sync (click in KiCad -> MCP knows, MCP selects -> KiCad highlights)
 
 ### Schematic-PCB Sync
 - [ ] Forward annotation: push schematic changes to PCB
@@ -22,20 +22,25 @@
 - [ ] Cross-reference validation (schematic vs PCB mismatch detection)
 
 ### JLCPCB Parts Integration
-- [ ] Live JLCPCB parts catalog search (basic/extended stock)
-- [ ] Part availability + pricing lookup
-- [ ] Auto-assign LCSC part numbers to BOM
-- [ ] JLCPCB-specific BOM + CPL export
+- [x] Live JLCPCB parts catalog search (basic/extended stock)
+- [x] Part availability + pricing lookup
+- [x] Auto-assign LCSC part numbers to BOM
+- [x] JLCPCB-specific BOM + CPL export
 
 ---
 
 ## New Feature Ideas
 
 ### Auto-Routing
-- [ ] Simple point-to-point auto-router (Manhattan/45-degree)
+- [x] Simple point-to-point auto-router (Manhattan/45-degree)
 - [ ] Differential pair routing helper
 - [ ] Length-matched routing for high-speed signals
 - [ ] Fan-out via generation for BGA/QFN pads
+
+### Auto-Placement
+- [x] Force-directed component placement with SA cooling
+- [x] Placement evaluation (HPWL metric, overlap detection)
+- [ ] Constraint-aware placement (keep-out zones, thermal grouping)
 
 ### Design Assistance
 - [ ] Component placement suggestions (group by function, minimize trace length)
@@ -87,3 +92,5 @@
 - [x] Integration tests for new session manager methods (12 tests covering full commit/rollback workflows)
 - [x] Performance benchmarks for large boards (24 tests, up to 500 components)
 - [x] CI pipeline (GitHub Actions: pytest + ruff + mypy on Python 3.11-3.13, Ubuntu + Windows)
+- [x] Pagination (limit/offset) for listing tools to prevent context window overflow
+- [x] Global response truncation safety net in execute_tool (50KB cap)

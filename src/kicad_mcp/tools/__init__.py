@@ -19,6 +19,7 @@ from . import (  # noqa: F401
     project,
     routing,
     schematic,
+    sync,
 )
 from .registry import TOOL_REGISTRY, get_categories, register_tool
 from .router import register_router_tools
