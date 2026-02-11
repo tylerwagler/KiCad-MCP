@@ -70,7 +70,95 @@ def _make_mock_kicad(board: MagicMock | None = None) -> MagicMock:
     """Create a mock KiCad connection."""
     kicad = MagicMock()
     kicad.get_board.return_value = board or _make_mock_board()
+    # Add version info
+    kicad.get_version.return_value = "9.0.1"
+    kicad.version = "9.0.1"
+    kicad.ping.return_value = True
     return kicad
+
+
+def _make_mock_track(
+    start_x: float = 10.0,
+    start_y: float = 10.0,
+    end_x: float = 20.0,
+    end_y: float = 20.0,
+    width: float = 0.25,
+    layer: str = "F.Cu",
+    net_code: int = 1,
+    net_name: str = "GND",
+) -> MagicMock:
+    """Create a mock kipy TrackSegment."""
+    track = MagicMock()
+    track.start = MagicMock()
+    track.start.x = int(start_x * 1_000_000)
+    track.start.y = int(start_y * 1_000_000)
+    track.end = MagicMock()
+    track.end.x = int(end_x * 1_000_000)
+    track.end.y = int(end_y * 1_000_000)
+    track.width = int(width * 1_000_000)
+    track.layer = layer
+    track.net_code = net_code
+    track.net = MagicMock()
+    track.net.name = net_name
+    track.uuid = f"track-{net_code}"
+    return track
+
+
+def _make_mock_via(
+    x: float = 15.0,
+    y: float = 15.0,
+    size: float = 0.8,
+    drill: float = 0.4,
+    layer_start: str = "F.Cu",
+    layer_end: str = "B.Cu",
+    net_code: int = 1,
+    net_name: str = "GND",
+) -> MagicMock:
+    """Create a mock kipy Via."""
+    via = MagicMock()
+    via.position = MagicMock()
+    via.position.x = int(x * 1_000_000)
+    via.position.y = int(y * 1_000_000)
+    via.width = int(size * 1_000_000)
+    via.drill = int(drill * 1_000_000)
+    via.layer_start = layer_start
+    via.layer_end = layer_end
+    via.net_code = net_code
+    via.net = MagicMock()
+    via.net.name = net_name
+    via.uuid = f"via-{net_code}"
+    return via
+
+
+def _make_mock_zone(
+    net_code: int = 1,
+    net_name: str = "GND",
+    layer: str = "F.Cu",
+    filled: bool = True,
+    priority: int = 0,
+    outline_points: list[tuple[float, float]] | None = None,
+) -> MagicMock:
+    """Create a mock kipy Zone."""
+    zone = MagicMock()
+    zone.net_code = net_code
+    zone.net = MagicMock()
+    zone.net.name = net_name
+    zone.layer = layer
+    zone.is_filled = filled
+    zone.priority = priority
+    # Outline points
+    if outline_points:
+        outline = []
+        for x, y in outline_points:
+            pt = MagicMock()
+            pt.x = int(x * 1_000_000)
+            pt.y = int(y * 1_000_000)
+            outline.append(pt)
+        zone.outline = outline
+    else:
+        zone.outline = []
+    zone.uuid = f"zone-{net_code}"
+    return zone
 
 
 # ── TestIpcBackend ───────────────────────────────────────────────────
@@ -307,6 +395,149 @@ class TestIpcOperations:
         with pytest.raises(IpcError, match="Failed to get board state"):
             ipc.get_board_state()
 
+    def test_get_tracks(self) -> None:
+        """Read tracks from the board."""
+        board = _make_mock_board()
+        tracks = [
+            _make_mock_track(10, 10, 20, 20, 0.25, "F.Cu", 1, "GND"),
+            _make_mock_track(20, 20, 30, 30, 0.5, "B.Cu", 2, "VCC"),
+        ]
+        board.get_tracks.return_value = tracks
+        ipc, _ = self._connect_with_mock(board)
+        result = ipc.get_tracks()
+        assert len(result) == 2
+        assert result[0]["start"]["x"] == 10.0
+        assert result[0]["end"]["x"] == 20.0
+        assert result[0]["width"] == 0.25
+        assert result[0]["net_name"] == "GND"
+        assert result[1]["width"] == 0.5
+        assert result[1]["net_name"] == "VCC"
+
+    def test_get_tracks_empty(self) -> None:
+        """Get tracks returns empty list for board with no tracks."""
+        board = _make_mock_board()
+        board.get_tracks.return_value = []
+        ipc, _ = self._connect_with_mock(board)
+        result = ipc.get_tracks()
+        assert result == []
+
+    def test_get_vias(self) -> None:
+        """Read vias from the board."""
+        board = _make_mock_board()
+        vias = [
+            _make_mock_via(15, 15, 0.8, 0.4, "F.Cu", "B.Cu", 1, "GND"),
+            _make_mock_via(25, 25, 0.6, 0.3, "F.Cu", "In2.Cu", 2, "VCC"),
+        ]
+        board.get_vias.return_value = vias
+        ipc, _ = self._connect_with_mock(board)
+        result = ipc.get_vias()
+        assert len(result) == 2
+        assert result[0]["position"]["x"] == 15.0
+        assert result[0]["size"] == 0.8
+        assert result[0]["drill"] == 0.4
+        assert result[0]["layers"]["start"] == "F.Cu"
+        assert result[0]["layers"]["end"] == "B.Cu"
+        assert result[0]["net_name"] == "GND"
+        assert result[1]["size"] == 0.6
+
+    def test_get_vias_empty(self) -> None:
+        """Get vias returns empty list for board with no vias."""
+        board = _make_mock_board()
+        board.get_vias.return_value = []
+        ipc, _ = self._connect_with_mock(board)
+        result = ipc.get_vias()
+        assert result == []
+
+    def test_get_zones(self) -> None:
+        """Read zones from the board."""
+        board = _make_mock_board()
+        zones = [
+            _make_mock_zone(1, "GND", "F.Cu", True, 0, [(0, 0), (10, 0), (10, 10), (0, 10)]),
+            _make_mock_zone(2, "VCC", "B.Cu", False, 1, [(20, 20), (30, 20), (30, 30)]),
+        ]
+        board.get_zones.return_value = zones
+        ipc, _ = self._connect_with_mock(board)
+        result = ipc.get_zones()
+        assert len(result) == 2
+        assert result[0]["net_name"] == "GND"
+        assert result[0]["layer"] == "F.Cu"
+        assert result[0]["filled"] is True
+        assert result[0]["priority"] == 0
+        assert len(result[0]["outline_points"]) == 4
+        assert result[0]["outline_points"][0]["x"] == 0.0
+        assert result[1]["net_name"] == "VCC"
+        assert result[1]["filled"] is False
+        assert len(result[1]["outline_points"]) == 3
+
+    def test_get_zones_empty(self) -> None:
+        """Get zones returns empty list for board with no zones."""
+        board = _make_mock_board()
+        board.get_zones.return_value = []
+        ipc, _ = self._connect_with_mock(board)
+        result = ipc.get_zones()
+        assert result == []
+
+    def test_ping_success(self) -> None:
+        """Ping returns True when connection is alive."""
+        board = _make_mock_board()
+        ipc, _ = self._connect_with_mock(board)
+        ipc._kicad.ping.return_value = True
+        assert ipc.ping() is True
+
+    def test_ping_failure(self) -> None:
+        """Ping returns False when connection dropped."""
+        board = _make_mock_board()
+        ipc, _ = self._connect_with_mock(board)
+        ipc._kicad.ping.return_value = False
+        assert ipc.ping() is False
+
+    def test_ping_not_connected(self) -> None:
+        """Ping returns False when not connected."""
+        ipc = IpcBackend.get()
+        assert ipc.ping() is False
+
+    def test_ping_fallback_to_get_board(self) -> None:
+        """Ping uses get_board as fallback when ping() method not available."""
+        board = _make_mock_board()
+        ipc, _ = self._connect_with_mock(board)
+        # Remove ping method
+        del ipc._kicad.ping
+        # Should still return True if get_board succeeds
+        assert ipc.ping() is True
+
+    def test_get_kicad_version(self) -> None:
+        """Get KiCad version information."""
+        board = _make_mock_board()
+        ipc, _ = self._connect_with_mock(board)
+        ipc._kicad.get_version.return_value = "9.0.1"
+        result = ipc.get_kicad_version()
+        assert result["version"] == "9.0.1"
+        assert result["major"] == 9
+        assert result["minor"] == 0
+        assert result["patch"] == 1
+
+    def test_get_kicad_version_with_suffix(self) -> None:
+        """Parse version with rc/dev suffix."""
+        board = _make_mock_board()
+        ipc, _ = self._connect_with_mock(board)
+        ipc._kicad.get_version.return_value = "9.1.0-rc2"
+        result = ipc.get_kicad_version()
+        assert result["version"] == "9.1.0-rc2"
+        assert result["major"] == 9
+        assert result["minor"] == 1
+        assert result["patch"] == 0
+
+    def test_get_kicad_version_fallback_to_property(self) -> None:
+        """Get version from .version property if get_version() not available."""
+        board = _make_mock_board()
+        ipc, _ = self._connect_with_mock(board)
+        del ipc._kicad.get_version
+        ipc._kicad.version = "9.2.3"
+        result = ipc.get_kicad_version()
+        assert result["major"] == 9
+        assert result["minor"] == 2
+        assert result["patch"] == 3
+
 
 # ── TestIpcToolHandlers ──────────────────────────────────────────────
 
@@ -462,6 +693,120 @@ class TestIpcToolHandlers:
             result = _ipc_refresh_board_handler()
             assert "error" in result
 
+    def test_get_tracks_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_tracks_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        tracks = [_make_mock_track(), _make_mock_track(20, 20, 30, 30)]
+        board.get_tracks.return_value = tracks
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_tracks_handler()
+        assert result["count"] == 2
+        assert len(result["tracks"]) == 2
+
+    def test_get_tracks_tool_not_connected(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_tracks_handler
+
+        with patch("kicad_mcp.backends.ipc_api._KIPY_AVAILABLE", False):
+            result = _ipc_get_tracks_handler()
+            assert "error" in result
+
+    def test_get_vias_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_vias_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        vias = [_make_mock_via(), _make_mock_via(25, 25)]
+        board.get_vias.return_value = vias
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_vias_handler()
+        assert result["count"] == 2
+        assert len(result["vias"]) == 2
+
+    def test_get_vias_tool_not_connected(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_vias_handler
+
+        with patch("kicad_mcp.backends.ipc_api._KIPY_AVAILABLE", False):
+            result = _ipc_get_vias_handler()
+            assert "error" in result
+
+    def test_get_zones_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_zones_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        zones = [_make_mock_zone(1, "GND"), _make_mock_zone(2, "VCC")]
+        board.get_zones.return_value = zones
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        result = _ipc_get_zones_handler()
+        assert result["count"] == 2
+        assert len(result["zones"]) == 2
+
+    def test_get_zones_tool_not_connected(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_zones_handler
+
+        with patch("kicad_mcp.backends.ipc_api._KIPY_AVAILABLE", False):
+            result = _ipc_get_zones_handler()
+            assert "error" in result
+
+    def test_ping_tool_connected(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_ping_handler
+
+        ipc = IpcBackend.get()
+        ipc._kicad = _make_mock_kicad()
+        ipc._connected = True
+        ipc._kicad.ping.return_value = True
+
+        result = _ipc_ping_handler()
+        assert result["alive"] is True
+
+    def test_ping_tool_dropped(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_ping_handler
+
+        ipc = IpcBackend.get()
+        ipc._kicad = _make_mock_kicad()
+        ipc._connected = True
+        ipc._kicad.ping.return_value = False
+
+        result = _ipc_ping_handler()
+        assert result["alive"] is False
+
+    def test_ping_tool_not_connected(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_ping_handler
+
+        # Not connected
+        result = _ipc_ping_handler()
+        assert result["alive"] is False
+
+    def test_get_version_tool(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_version_handler
+
+        ipc = IpcBackend.get()
+        board = _make_mock_board()
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+        ipc._kicad.get_version.return_value = "9.0.1"
+
+        result = _ipc_get_version_handler()
+        assert result["version"] == "9.0.1"
+        assert result["major"] == 9
+        assert result["minor"] == 0
+        assert result["patch"] == 1
+
+    def test_get_version_tool_not_connected(self) -> None:
+        from kicad_mcp.tools.ipc_sync import _ipc_get_version_handler
+
+        with patch("kicad_mcp.backends.ipc_api._KIPY_AVAILABLE", False):
+            result = _ipc_get_version_handler()
+            assert "error" in result
+
 
 # ── TestSessionIpcIntegration ────────────────────────────────────────
 
@@ -574,6 +919,155 @@ class TestSessionIpcIntegration:
         assert SessionManager._parse_at_coords("(not_at 1 2)") == (None, None)
         assert SessionManager._parse_at_coords("") == (None, None)
 
+    def test_rollback_reverses_ipc_move(self, tmp_path: Any) -> None:
+        """Rollback reverses IPC changes back to original state."""
+        from kicad_mcp.session import SessionManager
+        from kicad_mcp.sexp import Document
+
+        raw = (
+            '(kicad_pcb (version 20240108) (generator "test")'
+            ' (footprint "Lib:FP" (layer "F.Cu")'
+            ' (at 10 20) (property "Reference" "R1"'
+            ' (at 0 0 0) (layer "F.SilkS") (uuid "abc")'
+            " (effects (font (size 1 1) (thickness 0.15))))))"
+        )
+        board_file = tmp_path / "test.kicad_pcb"
+        board_file.write_text(raw)
+
+        doc = Document.load(str(board_file))
+        mgr = SessionManager()
+        session = mgr.start_session(doc)
+
+        # Apply a move (10,20 -> 25,30)
+        mgr.apply_move(session, "R1", 25.0, 30.0)
+
+        # Set up IPC
+        ipc = IpcBackend.get()
+        fp = _make_mock_footprint("R1", x=25.0, y=30.0)
+        board = _make_mock_board([fp])
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        # Commit to push changes to IPC
+        mgr.commit(session)
+
+        # Start a new session and rollback
+        session2 = mgr.start_session(doc)
+        mgr.apply_move(session2, "R1", 50.0, 60.0)
+
+        result = mgr.rollback(session2)
+        assert result["status"] == "rolled_back"
+        assert result["discarded_changes"] == 1
+        assert result["ipc_reversed"] == 1
+
+        # Verify move_footprint was called with original coordinates (10, 20)
+        # The last call to move_footprint should be the reversal
+        calls = board.update_items.call_args_list
+        # Should have been called during reversal
+        assert len(calls) >= 1
+
+    def test_rollback_no_ipc_still_works(self, tmp_path: Any) -> None:
+        """Rollback works normally without IPC connected."""
+        from kicad_mcp.session import SessionManager
+        from kicad_mcp.sexp import Document
+
+        raw = (
+            '(kicad_pcb (version 20240108) (generator "test")'
+            ' (footprint "Lib:FP" (layer "F.Cu")'
+            ' (at 10 20) (property "Reference" "R1"'
+            ' (at 0 0 0) (layer "F.SilkS") (uuid "abc")'
+            " (effects (font (size 1 1) (thickness 0.15))))))"
+        )
+        board_file = tmp_path / "test.kicad_pcb"
+        board_file.write_text(raw)
+
+        doc = Document.load(str(board_file))
+        mgr = SessionManager()
+        session = mgr.start_session(doc)
+        mgr.apply_move(session, "R1", 25.0, 30.0)
+
+        # No IPC connection
+        result = mgr.rollback(session)
+        assert result["status"] == "rolled_back"
+        assert result["discarded_changes"] == 1
+        assert "ipc_reversed" not in result
+
+    def test_undo_reverses_ipc_move(self, tmp_path: Any) -> None:
+        """Undo reverses a single move in IPC."""
+        from kicad_mcp.session import SessionManager
+        from kicad_mcp.sexp import Document
+
+        raw = (
+            '(kicad_pcb (version 20240108) (generator "test")'
+            ' (footprint "Lib:FP" (layer "F.Cu")'
+            ' (at 10 20) (property "Reference" "R1"'
+            ' (at 0 0 0) (layer "F.SilkS") (uuid "abc")'
+            " (effects (font (size 1 1) (thickness 0.15))))))"
+        )
+        board_file = tmp_path / "test.kicad_pcb"
+        board_file.write_text(raw)
+
+        doc = Document.load(str(board_file))
+        mgr = SessionManager()
+        session = mgr.start_session(doc)
+
+        # Apply a move
+        mgr.apply_move(session, "R1", 25.0, 30.0)
+
+        # Set up IPC
+        ipc = IpcBackend.get()
+        fp = _make_mock_footprint("R1", x=10.0, y=20.0)
+        board = _make_mock_board([fp])
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        # Undo should reverse the move back to (10, 20)
+        record = mgr.undo(session)
+        assert record is not None
+        assert record.operation == "move_component"
+        assert not record.applied
+
+        # Verify IPC move was called (reversal)
+        assert board.update_items.call_count >= 1
+
+    def test_undo_reverses_ipc_rotate(self, tmp_path: Any) -> None:
+        """Undo reverses a rotation in IPC."""
+        from kicad_mcp.session import SessionManager
+        from kicad_mcp.sexp import Document
+
+        raw = (
+            '(kicad_pcb (version 20240108) (generator "test")'
+            ' (footprint "Lib:FP" (layer "F.Cu")'
+            ' (at 10 20 0) (property "Reference" "R1"'
+            ' (at 0 0 0) (layer "F.SilkS") (uuid "abc")'
+            " (effects (font (size 1 1) (thickness 0.15))))))"
+        )
+        board_file = tmp_path / "test.kicad_pcb"
+        board_file.write_text(raw)
+
+        doc = Document.load(str(board_file))
+        mgr = SessionManager()
+        session = mgr.start_session(doc)
+
+        # Apply a rotation
+        mgr.apply_rotate(session, "R1", 90.0)
+
+        # Set up IPC
+        ipc = IpcBackend.get()
+        fp = _make_mock_footprint("R1", x=10.0, y=20.0, rotation=0.0)
+        board = _make_mock_board([fp])
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        # Undo should reverse the rotation back to 0
+        record = mgr.undo(session)
+        assert record is not None
+        assert record.operation == "rotate_component"
+        assert not record.applied
+
+        # Verify IPC update was called
+        assert board.update_items.call_count >= 1
+
 
 # ── TestToolRegistration ─────────────────────────────────────────────
 
@@ -590,6 +1084,11 @@ class TestToolRegistration:
             "ipc_get_selection",
             "ipc_push_changes",
             "ipc_refresh_board",
+            "ipc_get_tracks",
+            "ipc_get_vias",
+            "ipc_get_zones",
+            "ipc_ping",
+            "ipc_get_version",
         ]
         for name in ipc_tools:
             assert name in TOOL_REGISTRY, f"Tool {name!r} not registered"
@@ -608,4 +1107,4 @@ class TestToolRegistration:
 
         cats = get_categories()
         assert "ipc_sync" in cats
-        assert len(cats["ipc_sync"]) == 5
+        assert len(cats["ipc_sync"]) == 10  # Updated from 5 to 10

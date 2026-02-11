@@ -225,6 +225,176 @@ class IpcBackend:
         except Exception as exc:
             raise IpcError(f"Failed to get selection: {exc}") from exc
 
+    def get_tracks(self) -> list[dict[str, Any]]:
+        """Get all track segments from live board.
+
+        Returns:
+            List of dicts with: start, end, width, layer, net_code, net_name, uuid
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            tracks = board.get_tracks()
+            result = []
+            for track in tracks:
+                entry = {
+                    "start": {
+                        "x": self._nm_to_mm(track.start.x),
+                        "y": self._nm_to_mm(track.start.y),
+                    },
+                    "end": {
+                        "x": self._nm_to_mm(track.end.x),
+                        "y": self._nm_to_mm(track.end.y),
+                    },
+                    "width": self._nm_to_mm(track.width),
+                    "layer": str(track.layer) if hasattr(track, "layer") else "",
+                    "net_code": track.net_code if hasattr(track, "net_code") else 0,
+                }
+                if hasattr(track, "net") and track.net:
+                    entry["net_name"] = track.net.name if hasattr(track.net, "name") else ""
+                else:
+                    entry["net_name"] = ""
+                if hasattr(track, "uuid"):
+                    entry["uuid"] = str(track.uuid)
+                result.append(entry)
+            return result
+        except Exception as exc:
+            raise IpcError(f"Failed to get tracks: {exc}") from exc
+
+    def get_vias(self) -> list[dict[str, Any]]:
+        """Get all vias from live board.
+
+        Returns:
+            List of dicts with: position, size, drill, layers (start/end), net_code, net_name, uuid
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            vias = board.get_vias()
+            result = []
+            for via in vias:
+                entry = {
+                    "position": {
+                        "x": self._nm_to_mm(via.position.x),
+                        "y": self._nm_to_mm(via.position.y),
+                    },
+                    "size": self._nm_to_mm(via.width) if hasattr(via, "width") else 0.0,
+                    "drill": self._nm_to_mm(via.drill) if hasattr(via, "drill") else 0.0,
+                    "net_code": via.net_code if hasattr(via, "net_code") else 0,
+                }
+                # Layer span for via
+                if hasattr(via, "layer_start") and hasattr(via, "layer_end"):
+                    entry["layers"] = {
+                        "start": str(via.layer_start),
+                        "end": str(via.layer_end),
+                    }
+                else:
+                    entry["layers"] = {"start": "", "end": ""}
+                if hasattr(via, "net") and via.net:
+                    entry["net_name"] = via.net.name if hasattr(via.net, "name") else ""
+                else:
+                    entry["net_name"] = ""
+                if hasattr(via, "uuid"):
+                    entry["uuid"] = str(via.uuid)
+                result.append(entry)
+            return result
+        except Exception as exc:
+            raise IpcError(f"Failed to get vias: {exc}") from exc
+
+    def get_zones(self) -> list[dict[str, Any]]:
+        """Get all copper zones from live board.
+
+        Returns:
+            List of dicts with: net_code, net_name, layer, filled, priority, outline_points
+        """
+        self.require_connection()
+        try:
+            board = self._kicad.get_board()
+            zones = board.get_zones()
+            result = []
+            for zone in zones:
+                entry = {
+                    "net_code": zone.net_code if hasattr(zone, "net_code") else 0,
+                    "layer": str(zone.layer) if hasattr(zone, "layer") else "",
+                    "filled": zone.is_filled if hasattr(zone, "is_filled") else False,
+                    "priority": zone.priority if hasattr(zone, "priority") else 0,
+                }
+                if hasattr(zone, "net") and zone.net:
+                    entry["net_name"] = zone.net.name if hasattr(zone.net, "name") else ""
+                else:
+                    entry["net_name"] = ""
+                # Outline points (simplified)
+                if hasattr(zone, "outline") and zone.outline:
+                    try:
+                        points = []
+                        for pt in zone.outline:
+                            points.append(
+                                {
+                                    "x": self._nm_to_mm(pt.x),
+                                    "y": self._nm_to_mm(pt.y),
+                                }
+                            )
+                        entry["outline_points"] = points
+                    except Exception:
+                        entry["outline_points"] = []
+                else:
+                    entry["outline_points"] = []
+                if hasattr(zone, "uuid"):
+                    entry["uuid"] = str(zone.uuid)
+                result.append(entry)
+            return result
+        except Exception as exc:
+            raise IpcError(f"Failed to get zones: {exc}") from exc
+
+    def ping(self) -> bool:
+        """Verify active connection to KiCad (not just flag check).
+
+        Returns:
+            True if connection is alive, False otherwise.
+        """
+        if not self._connected or not self._kicad:
+            return False
+        try:
+            # Try to ping the connection
+            if hasattr(self._kicad, "ping"):
+                return self._kicad.ping()
+            # Fallback: try to get board as a health check
+            self._kicad.get_board()
+            return True
+        except Exception:
+            return False
+
+    def get_kicad_version(self) -> dict[str, Any]:
+        """Get KiCad version info.
+
+        Returns:
+            Dict with: version, full_version, major, minor, patch
+        """
+        self.require_connection()
+        try:
+            version_str = ""
+            if hasattr(self._kicad, "get_version"):
+                version_str = self._kicad.get_version()
+            elif hasattr(self._kicad, "version"):
+                version_str = self._kicad.version
+
+            # Parse version string like "9.0.1" or "9.0.1-rc1"
+            parts = version_str.split(".")
+            major = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+            minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+            patch_str = parts[2].split("-")[0] if len(parts) > 2 else "0"
+            patch = int(patch_str) if patch_str.isdigit() else 0
+
+            return {
+                "version": version_str,
+                "full_version": version_str,
+                "major": major,
+                "minor": minor,
+                "patch": patch,
+            }
+        except Exception as exc:
+            raise IpcError(f"Failed to get KiCad version: {exc}") from exc
+
     # ── Write operations (live push) ────────────────────────────────
 
     def move_footprint(self, reference: str, x: float, y: float) -> None:

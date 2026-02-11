@@ -236,6 +236,98 @@ def _ipc_refresh_board_handler() -> dict[str, Any]:
         return _ipc_error_response(exc)
 
 
+def _ipc_get_tracks_handler() -> dict[str, Any]:
+    """Read all trace segments from the live KiCad board.
+
+    Returns track start/end points, width, layer, and net information.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        tracks = ipc.get_tracks()
+        return {"tracks": tracks, "count": len(tracks)}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_get_vias_handler() -> dict[str, Any]:
+    """Read all vias from the live KiCad board.
+
+    Returns via position, size, drill, layer span, and net information.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        vias = ipc.get_vias()
+        return {"vias": vias, "count": len(vias)}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_get_zones_handler() -> dict[str, Any]:
+    """Read all copper zones from the live KiCad board.
+
+    Returns zone net, layer, fill status, priority, and outline.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        zones = ipc.get_zones()
+        return {"zones": zones, "count": len(zones)}
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
+def _ipc_ping_handler() -> dict[str, Any]:
+    """Verify connection to KiCad is alive.
+
+    This actively checks the socket, not just the internal connection flag.
+    Useful for detecting if KiCad closed or the socket dropped.
+    """
+    ipc = _get_ipc()
+    if not ipc.is_connected():
+        return {"alive": False, "message": "Not connected to KiCad"}
+
+    alive = ipc.ping()
+    if alive:
+        return {"alive": True, "message": "Connection to KiCad is active"}
+    return {"alive": False, "message": "Connection to KiCad dropped"}
+
+
+def _ipc_get_version_handler() -> dict[str, Any]:
+    """Get KiCad version information from the running instance.
+
+    Returns version string and parsed major/minor/patch numbers.
+    """
+    from ..backends.ipc_api import IpcError, IpcNotAvailable
+
+    err = _ensure_connected()
+    if err:
+        return err
+
+    ipc = _get_ipc()
+    try:
+        version_info = ipc.get_kicad_version()
+        return version_info
+    except (IpcNotAvailable, IpcError) as exc:
+        return _ipc_error_response(exc)
+
+
 # ── Tool Registration ───────────────────────────────────────────────
 
 register_tool(
@@ -305,5 +397,61 @@ register_tool(
     ),
     parameters={},
     handler=_ipc_refresh_board_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_get_tracks",
+    description=(
+        "Read all trace segments from the live KiCad board. "
+        "Returns track start/end points, width, layer, and net information."
+    ),
+    parameters={},
+    handler=_ipc_get_tracks_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_get_vias",
+    description=(
+        "Read all vias from the live KiCad board. "
+        "Returns via position, size, drill, layer span, and net information."
+    ),
+    parameters={},
+    handler=_ipc_get_vias_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_get_zones",
+    description=(
+        "Read all copper zones from the live KiCad board. "
+        "Returns zone net, layer, fill status, priority, and outline."
+    ),
+    parameters={},
+    handler=_ipc_get_zones_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_ping",
+    description=(
+        "Verify connection to KiCad is alive. "
+        "Actively checks the socket, not just the internal connection flag. "
+        "Useful for detecting if KiCad closed or the socket dropped."
+    ),
+    parameters={},
+    handler=_ipc_ping_handler,
+    category="ipc_sync",
+)
+
+register_tool(
+    name="ipc_get_version",
+    description=(
+        "Get KiCad version information from the running instance. "
+        "Returns version string and parsed major/minor/patch numbers."
+    ),
+    parameters={},
+    handler=_ipc_get_version_handler,
     category="ipc_sync",
 )

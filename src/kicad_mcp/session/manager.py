@@ -1703,8 +1703,14 @@ class SessionManager:
         return None
 
     def _undo_record(self, session: Session, record: ChangeRecord) -> None:
-        """Reverse a single change record."""
+        """Reverse a single change record.
+
+        Also reverses the change in KiCad GUI via IPC if connected.
+        """
         assert session._working_doc is not None
+
+        # Reverse in IPC GUI first (best-effort)
+        self._reverse_ipc_changes([record])
 
         if record.operation in ("move_component", "rotate_component"):
             fp_node = self._find_footprint(session._working_doc, record.target)
@@ -1986,15 +1992,80 @@ class SessionManager:
                     pass
         return None, None
 
+    @staticmethod
+    def _reverse_ipc_changes(applied: list[ChangeRecord]) -> int:
+        """Reverse applied changes in KiCad GUI via IPC.
+
+        Iterates changes in reverse order and pushes the before_snapshot
+        state back to KiCad. This is best-effort — if IPC is unavailable,
+        returns 0 without raising.
+
+        Returns:
+            Number of changes successfully reversed in the GUI.
+        """
+        try:
+            from ..backends.ipc_api import IpcBackend
+        except Exception:
+            return 0
+
+        ipc = IpcBackend.get()
+        if not ipc.is_connected():
+            return 0
+
+        reversed_count = 0
+        # Process in reverse order (undo most recent changes first)
+        for change in reversed(applied):
+            try:
+                op = change.operation
+                if op == "move_component":
+                    # Parse original coordinates from before_snapshot
+                    x, y = SessionManager._parse_at_coords(change.before_snapshot)
+                    if x is not None and y is not None:
+                        ipc.move_footprint(change.target, x, y)
+                        reversed_count += 1
+                elif op == "rotate_component":
+                    # Parse original angle from before_snapshot: (at X Y ANGLE)
+                    stripped = change.before_snapshot.strip()
+                    if stripped.startswith("(at "):
+                        parts = stripped[1:-1].split()
+                        if len(parts) >= 4:
+                            try:
+                                orig_angle = float(parts[3])
+                                ipc.rotate_footprint(change.target, orig_angle)
+                                reversed_count += 1
+                            except ValueError:
+                                pass
+                # Skip delete_component — IPC has no create_items for footprints yet
+            except Exception:
+                pass  # IPC reversal is best-effort
+
+        # Group all reversals as one undo step in KiCad
+        if reversed_count > 0:
+            with contextlib.suppress(Exception):
+                ipc.commit_to_undo()
+
+        return reversed_count
+
     def rollback(self, session: Session) -> dict[str, Any]:
-        """Rollback all changes — discard the working copy."""
+        """Rollback all changes — discard the working copy.
+
+        If IPC is connected, also reverses changes in KiCad's GUI.
+        """
         self._require_active(session)
+
+        # Reverse IPC changes before discarding working doc
+        applied = [c for c in session.changes if c.applied]
+        ipc_reversed = self._reverse_ipc_changes(applied)
+
         session._working_doc = None
         session.state = SessionState.ROLLED_BACK
-        return {
+        result: dict[str, Any] = {
             "status": "rolled_back",
             "discarded_changes": len(session.changes),
         }
+        if ipc_reversed > 0:
+            result["ipc_reversed"] = ipc_reversed
+        return result
 
     # ── Helpers ──────────────────────────────────────────────────────
 
