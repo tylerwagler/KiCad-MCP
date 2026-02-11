@@ -25,12 +25,14 @@ def _make_mock_footprint(
 ) -> MagicMock:
     """Create a mock kipy footprint object."""
     fp = MagicMock()
-    fp.reference = reference
-    fp.value = value
+    fp.reference_field = MagicMock()
+    fp.reference_field.text = reference
+    fp.value_field = MagicMock()
+    fp.value_field.text = value
     fp.position = MagicMock()
     fp.position.x = x
     fp.position.y = y
-    fp.rotation = rotation
+    fp.orientation = rotation
     fp.layer = layer
     return fp
 
@@ -232,7 +234,7 @@ class TestIpcOperations:
         board = _make_mock_board([fp])
         ipc, _ = self._connect_with_mock(board)
         ipc.rotate_footprint("R1", 90.0)
-        assert fp.rotation == 90.0
+        assert fp.orientation == 90.0
         board.update_footprint.assert_called_once_with(fp)
 
     def test_delete_footprint(self) -> None:

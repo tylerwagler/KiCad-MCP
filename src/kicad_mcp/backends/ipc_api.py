@@ -153,7 +153,7 @@ class IpcBackend:
                 "net_count": len(nets),
                 "footprints": [
                     {
-                        "reference": fp.reference,
+                        "reference": fp.reference_field.text,
                         "position": {"x": fp.position.x, "y": fp.position.y},
                     }
                     for fp in footprints
@@ -170,11 +170,11 @@ class IpcBackend:
             footprints = board.get_footprints()
             return [
                 {
-                    "reference": fp.reference,
-                    "value": getattr(fp, "value", ""),
+                    "reference": fp.reference_field.text,
+                    "value": fp.value_field.text if fp.value_field else "",
                     "position": {"x": fp.position.x, "y": fp.position.y},
-                    "rotation": getattr(fp, "rotation", 0),
-                    "layer": getattr(fp, "layer", ""),
+                    "rotation": fp.orientation if hasattr(fp, "orientation") else 0,
+                    "layer": fp.layer if hasattr(fp, "layer") else "",
                 }
                 for fp in footprints
             ]
@@ -190,8 +190,8 @@ class IpcBackend:
             items = []
             for item in selection:
                 entry: dict[str, Any] = {"type": type(item).__name__}
-                if hasattr(item, "reference"):
-                    entry["reference"] = item.reference
+                if hasattr(item, "reference_field"):
+                    entry["reference"] = item.reference_field.text
                 if hasattr(item, "position"):
                     entry["position"] = {"x": item.position.x, "y": item.position.y}
                 items.append(entry)
@@ -221,7 +221,7 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             fp = self._find_footprint_by_ref(board, reference)
-            fp.rotation = angle
+            fp.orientation = angle
             board.update_footprint(fp)
         except IpcError:
             raise
@@ -285,6 +285,6 @@ class IpcBackend:
     def _find_footprint_by_ref(board: Any, reference: str) -> Any:
         """Find a footprint on the kipy board by reference designator."""
         for fp in board.get_footprints():
-            if fp.reference == reference:
+            if fp.reference_field.text == reference:
                 return fp
         raise IpcError(f"Component {reference!r} not found on the live board")
