@@ -2182,12 +2182,14 @@ class SessionManager:
                         reversed_count += 1
                 elif op == "rotate_component":
                     # Parse original angle from before_snapshot: (at X Y ANGLE)
+                    # Note: If angle is 0, KiCad omits it, so default to 0
                     stripped = change.before_snapshot.strip()
                     if stripped.startswith("(at "):
                         parts = stripped[1:-1].split()
-                        if len(parts) >= 4:
+                        if len(parts) >= 3:
                             try:
-                                orig_angle = float(parts[3])
+                                # Default to 0° if angle not present (KiCad omits it for 0°)
+                                orig_angle = float(parts[3]) if len(parts) >= 4 else 0.0
                                 ipc.rotate_footprint(change.target, orig_angle)
                                 reversed_count += 1
                             except ValueError:

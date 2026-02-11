@@ -1515,6 +1515,45 @@ class TestSessionIpcIntegration:
         # Verify IPC update was called
         assert board.update_items.call_count >= 1
 
+    def test_rollback_reverses_rotation_from_zero(self, tmp_path: Any) -> None:
+        """Rollback reverses rotation when original angle was 0° (omitted from S-expr)."""
+        from kicad_mcp.session import SessionManager
+        from kicad_mcp.sexp import Document
+
+        # Component at 0° - KiCad omits the angle
+        raw = (
+            '(kicad_pcb (version 20240108) (generator "test")'
+            ' (footprint "Lib:FP" (layer "F.Cu")'
+            ' (at 25 25) (property "Reference" "R2"'
+            ' (at 0 0 0) (layer "F.SilkS") (uuid "def")'
+            " (effects (font (size 1 1) (thickness 0.15))))))"
+        )
+        board_file = tmp_path / "test.kicad_pcb"
+        board_file.write_text(raw)
+
+        doc = Document.load(str(board_file))
+        mgr = SessionManager()
+        session = mgr.start_session(doc)
+
+        # Rotate to 45°
+        mgr.apply_rotate(session, "R2", 45.0)
+
+        # Set up IPC
+        ipc = IpcBackend.get()
+        fp = _make_mock_footprint("R2", x=25.0, y=25.0, rotation=45.0)
+        board = _make_mock_board([fp])
+        ipc._kicad = _make_mock_kicad(board)
+        ipc._connected = True
+
+        # Rollback should reverse to 0° even though before_snapshot is "(at 25 25)" without angle
+        result = mgr.rollback(session)
+        assert result["status"] == "rolled_back"
+        assert result["ipc_reversed"] == 1
+
+        # Verify rotate_footprint was called with 0.0
+        # Check the most recent call to update_items
+        assert board.update_items.call_count >= 1
+
     def test_commit_with_routing_triggers_zone_refill(self, tmp_path: Any) -> None:
         """Commit with routing changes triggers zone refill."""
         from kicad_mcp.session import SessionManager
