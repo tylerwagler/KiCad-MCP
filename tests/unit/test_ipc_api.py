@@ -23,12 +23,15 @@ def _make_mock_footprint(
     rotation: float = 0.0,
     layer: str = "F.Cu",
 ) -> MagicMock:
-    """Create a mock kipy footprint object.
+    """Create a mock kipy FootprintInstance.
 
-    Mirrors the real kipy FootprintInstance structure:
-      fp.reference_field.text  -> BoardText object
-      fp.reference_field.text.value -> the actual string
-    Positions are in nanometers (1 mm = 1_000_000 nm).
+    Mirrors the real kipy object graph:
+      fp.reference_field.text       -> BoardText
+      fp.reference_field.text.value -> str (the actual ref designator)
+      fp.value_field.text.value     -> str
+      fp.position                   -> Vector2 (x/y in nanometers)
+      fp.orientation                -> Angle (.degrees -> float)
+      fp.layer                      -> BoardLayer.ValueType (int enum)
     """
     fp = MagicMock()
     # reference_field.text is a BoardText; .value gives the string
@@ -43,9 +46,12 @@ def _make_mock_footprint(
     fp.value_field.text = val_text
     # Positions in nanometers
     fp.position = MagicMock()
-    fp.position.x = x * 1_000_000
-    fp.position.y = y * 1_000_000
-    fp.orientation = rotation
+    fp.position.x = int(x * 1_000_000)
+    fp.position.y = int(y * 1_000_000)
+    # Orientation is an Angle object with .degrees
+    fp.orientation = MagicMock()
+    fp.orientation.degrees = rotation
+    # Layer is an int enum in kipy
     fp.layer = layer
     return fp
 
@@ -155,32 +161,17 @@ class TestIpcBackend:
         assert result is True
         assert mock_kicad_cls.call_count == 1  # Not called again
 
-    @patch("kicad_mcp.backends.ipc_api.sys")
-    def test_detect_socket_linux(self, mock_sys: MagicMock) -> None:
-        """Socket auto-detect returns correct path on Linux."""
-        mock_sys.platform = "linux"
-        path = IpcBackend._detect_socket()
-        assert path == "/tmp/kicad/api.sock"
+    def test_detect_socket_no_env(self) -> None:
+        """Returns None when KICAD_API_SOCKET not set (kipy uses its own default)."""
+        with patch.dict("os.environ", {}, clear=True):
+            path = IpcBackend._detect_socket()
+            assert path is None
 
-    @patch("kicad_mcp.backends.ipc_api.sys")
-    def test_detect_socket_macos(self, mock_sys: MagicMock) -> None:
-        """Socket auto-detect returns correct path on macOS."""
-        mock_sys.platform = "darwin"
-        path = IpcBackend._detect_socket()
-        assert path == "/tmp/kicad/api.sock"
-
-    @patch("kicad_mcp.backends.ipc_api.sys")
-    def test_detect_socket_windows(self, mock_sys: MagicMock) -> None:
-        """Socket auto-detect returns None on Windows (kipy handles pipes)."""
-        mock_sys.platform = "win32"
-        path = IpcBackend._detect_socket()
-        assert path is None
-
-    @patch.dict("os.environ", {"KICAD_API_SOCKET": "/custom/path.sock"})
+    @patch.dict("os.environ", {"KICAD_API_SOCKET": "ipc:///custom/path.sock"})
     def test_detect_socket_env_var(self) -> None:
-        """Socket auto-detect respects KICAD_API_SOCKET env var."""
+        """Respects KICAD_API_SOCKET env var."""
         path = IpcBackend._detect_socket()
-        assert path == "/custom/path.sock"
+        assert path == "ipc:///custom/path.sock"
 
 
 # ── TestIpcOperations ────────────────────────────────────────────────
@@ -233,29 +224,36 @@ class TestIpcOperations:
         assert len(items) == 1
         assert items[0]["reference"] == "R2"
 
-    def test_move_footprint(self) -> None:
+    @patch("kicad_mcp.backends.ipc_api._Vector2")
+    def test_move_footprint(self, mock_vector2: MagicMock) -> None:
+        new_pos = MagicMock()
+        mock_vector2.from_xy.return_value = new_pos
         fp = _make_mock_footprint("R1", x=0, y=0)
         board = _make_mock_board([fp])
         ipc, _ = self._connect_with_mock(board)
         ipc.move_footprint("R1", 25.0, 30.0)
-        assert fp.position.x == 25_000_000  # mm -> nm
-        assert fp.position.y == 30_000_000
-        board.update_footprint.assert_called_once_with(fp)
+        mock_vector2.from_xy.assert_called_once_with(25_000_000, 30_000_000)
+        assert fp.position == new_pos
+        board.update_items.assert_called_once_with(fp)
 
-    def test_rotate_footprint(self) -> None:
+    @patch("kicad_mcp.backends.ipc_api._Angle")
+    def test_rotate_footprint(self, mock_angle: MagicMock) -> None:
+        new_angle = MagicMock()
+        mock_angle.from_degrees.return_value = new_angle
         fp = _make_mock_footprint("R1")
         board = _make_mock_board([fp])
         ipc, _ = self._connect_with_mock(board)
         ipc.rotate_footprint("R1", 90.0)
-        assert fp.orientation == 90.0
-        board.update_footprint.assert_called_once_with(fp)
+        mock_angle.from_degrees.assert_called_once_with(90.0)
+        assert fp.orientation == new_angle
+        board.update_items.assert_called_once_with(fp)
 
     def test_delete_footprint(self) -> None:
         fp = _make_mock_footprint("R1")
         board = _make_mock_board([fp])
         ipc, _ = self._connect_with_mock(board)
         ipc.delete_footprint("R1")
-        board.remove_footprint.assert_called_once_with(fp)
+        board.remove_items.assert_called_once_with(fp)
 
     def test_highlight_items(self) -> None:
         fp1 = _make_mock_footprint("R1")
@@ -263,7 +261,8 @@ class TestIpcOperations:
         board = _make_mock_board([fp1, fp2])
         ipc, _ = self._connect_with_mock(board)
         ipc.highlight_items(["R1", "C1"])
-        board.set_selection.assert_called_once_with([fp1, fp2])
+        board.clear_selection.assert_called_once()
+        board.add_to_selection.assert_called_once_with([fp1, fp2])
 
     def test_highlight_items_partial(self) -> None:
         """Highlighting ignores refs that don't exist on the board."""
@@ -271,7 +270,8 @@ class TestIpcOperations:
         board = _make_mock_board([fp1])
         ipc, _ = self._connect_with_mock(board)
         ipc.highlight_items(["R1", "Z99"])
-        board.set_selection.assert_called_once_with([fp1])
+        board.clear_selection.assert_called_once()
+        board.add_to_selection.assert_called_once_with([fp1])
 
     def test_clear_selection(self) -> None:
         ipc, board = self._connect_with_mock()
@@ -280,8 +280,11 @@ class TestIpcOperations:
 
     def test_commit_to_undo(self) -> None:
         ipc, board = self._connect_with_mock()
+        mock_commit = MagicMock()
+        board.begin_commit.return_value = mock_commit
         ipc.commit_to_undo()
-        board.commit.assert_called_once()
+        board.begin_commit.assert_called_once()
+        board.push_commit.assert_called_once_with(mock_commit, message="MCP session commit")
 
     def test_operation_not_connected(self) -> None:
         """Operations raise IpcNotAvailable when not connected."""

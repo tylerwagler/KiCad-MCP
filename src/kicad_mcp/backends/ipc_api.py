@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -24,11 +23,14 @@ KiCad: Any = None  # Will be set to the real class if kipy is available
 
 try:
     from kipy import KiCad as _KiCadCls  # type: ignore[import-untyped]
+    from kipy.geometry import Angle as _Angle  # type: ignore[import-untyped]
+    from kipy.geometry import Vector2 as _Vector2  # type: ignore[import-untyped]
 
     KiCad = _KiCadCls
     _KIPY_AVAILABLE = True
 except ImportError:
-    pass
+    _Angle = None
+    _Vector2 = None
 
 
 class IpcNotAvailable(Exception):
@@ -124,20 +126,11 @@ class IpcBackend:
     def _detect_socket() -> str | None:
         """Auto-detect the KiCad IPC socket path.
 
-        Checks ``KICAD_API_SOCKET`` env var first, then falls back to
-        platform-specific default paths.
+        Checks ``KICAD_API_SOCKET`` env var first. If unset, returns None
+        to let kipy use its own platform-specific default (which includes
+        the required ``ipc://`` URI prefix).
         """
-        env_path = os.environ.get("KICAD_API_SOCKET")
-        if env_path:
-            return env_path
-
-        if sys.platform == "win32":
-            return None  # kipy handles Windows named pipes automatically
-        elif sys.platform == "darwin":
-            return "/tmp/kicad/api.sock"
-        else:
-            # Linux
-            return "/tmp/kicad/api.sock"
+        return os.environ.get("KICAD_API_SOCKET")
 
     # ── kipy field helpers ────────────────────────────────────────────
 
@@ -203,8 +196,8 @@ class IpcBackend:
                         "x": self._nm_to_mm(fp.position.x),
                         "y": self._nm_to_mm(fp.position.y),
                     },
-                    "rotation": fp.orientation if hasattr(fp, "orientation") else 0,
-                    "layer": fp.layer if hasattr(fp, "layer") else "",
+                    "rotation": fp.orientation.degrees if hasattr(fp, "orientation") else 0,
+                    "layer": str(fp.layer) if hasattr(fp, "layer") else "",
                 }
                 for fp in footprints
             ]
@@ -223,7 +216,10 @@ class IpcBackend:
                 if hasattr(item, "reference_field"):
                     entry["reference"] = self._fp_ref(item)
                 if hasattr(item, "position"):
-                    entry["position"] = {"x": item.position.x, "y": item.position.y}
+                    entry["position"] = {
+                        "x": self._nm_to_mm(item.position.x),
+                        "y": self._nm_to_mm(item.position.y),
+                    }
                 items.append(entry)
             return items
         except Exception as exc:
@@ -237,9 +233,8 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             fp = self._find_footprint_by_ref(board, reference)
-            fp.position.x = self._mm_to_nm(x)
-            fp.position.y = self._mm_to_nm(y)
-            board.update_footprint(fp)
+            fp.position = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
+            board.update_items(fp)
         except IpcError:
             raise
         except Exception as exc:
@@ -251,8 +246,8 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             fp = self._find_footprint_by_ref(board, reference)
-            fp.orientation = angle
-            board.update_footprint(fp)
+            fp.orientation = _Angle.from_degrees(angle)
+            board.update_items(fp)
         except IpcError:
             raise
         except Exception as exc:
@@ -264,7 +259,7 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             fp = self._find_footprint_by_ref(board, reference)
-            board.remove_footprint(fp)
+            board.remove_items(fp)
         except IpcError:
             raise
         except Exception as exc:
@@ -285,7 +280,8 @@ class IpcBackend:
                 except IpcError:
                     logger.warning("Cannot highlight %s: not found", ref)
             if items:
-                board.set_selection(items)
+                board.clear_selection()
+                board.add_to_selection(items)
         except IpcError:
             raise
         except Exception as exc:
@@ -305,7 +301,8 @@ class IpcBackend:
         self.require_connection()
         try:
             board = self._kicad.get_board()
-            board.commit()
+            commit = board.begin_commit()
+            board.push_commit(commit, message="MCP session commit")
         except Exception as exc:
             raise IpcError(f"Failed to commit to undo stack: {exc}") from exc
 
