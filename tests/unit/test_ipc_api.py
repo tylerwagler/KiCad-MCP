@@ -23,15 +23,28 @@ def _make_mock_footprint(
     rotation: float = 0.0,
     layer: str = "F.Cu",
 ) -> MagicMock:
-    """Create a mock kipy footprint object."""
+    """Create a mock kipy footprint object.
+
+    Mirrors the real kipy FootprintInstance structure:
+      fp.reference_field.text  -> BoardText object
+      fp.reference_field.text.value -> the actual string
+    Positions are in nanometers (1 mm = 1_000_000 nm).
+    """
     fp = MagicMock()
+    # reference_field.text is a BoardText; .value gives the string
+    ref_text = MagicMock()
+    ref_text.value = reference
     fp.reference_field = MagicMock()
-    fp.reference_field.text = reference
+    fp.reference_field.text = ref_text
+    # value_field.text is also a BoardText
+    val_text = MagicMock()
+    val_text.value = value
     fp.value_field = MagicMock()
-    fp.value_field.text = value
+    fp.value_field.text = val_text
+    # Positions in nanometers
     fp.position = MagicMock()
-    fp.position.x = x
-    fp.position.y = y
+    fp.position.x = x * 1_000_000
+    fp.position.y = y * 1_000_000
     fp.orientation = rotation
     fp.layer = layer
     return fp
@@ -225,8 +238,8 @@ class TestIpcOperations:
         board = _make_mock_board([fp])
         ipc, _ = self._connect_with_mock(board)
         ipc.move_footprint("R1", 25.0, 30.0)
-        assert fp.position.x == 25.0
-        assert fp.position.y == 30.0
+        assert fp.position.x == 25_000_000  # mm -> nm
+        assert fp.position.y == 30_000_000
         board.update_footprint.assert_called_once_with(fp)
 
     def test_rotate_footprint(self) -> None:

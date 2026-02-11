@@ -139,6 +139,30 @@ class IpcBackend:
             # Linux
             return "/tmp/kicad/api.sock"
 
+    # ── kipy field helpers ────────────────────────────────────────────
+
+    @staticmethod
+    def _fp_ref(fp: Any) -> str:
+        """Extract reference designator string from a kipy FootprintInstance."""
+        # fp.reference_field.text returns a BoardText; .value is the plain str
+        return fp.reference_field.text.value
+
+    @staticmethod
+    def _fp_val(fp: Any) -> str:
+        """Extract value string from a kipy FootprintInstance."""
+        try:
+            return fp.value_field.text.value
+        except (AttributeError, TypeError):
+            return ""
+
+    @staticmethod
+    def _nm_to_mm(nm: float) -> float:
+        return nm / 1_000_000
+
+    @staticmethod
+    def _mm_to_nm(mm: float) -> int:
+        return int(mm * 1_000_000)
+
     # ── Read operations ─────────────────────────────────────────────
 
     def get_board_state(self) -> dict[str, Any]:
@@ -153,8 +177,11 @@ class IpcBackend:
                 "net_count": len(nets),
                 "footprints": [
                     {
-                        "reference": fp.reference_field.text,
-                        "position": {"x": fp.position.x, "y": fp.position.y},
+                        "reference": self._fp_ref(fp),
+                        "position": {
+                            "x": self._nm_to_mm(fp.position.x),
+                            "y": self._nm_to_mm(fp.position.y),
+                        },
                     }
                     for fp in footprints
                 ],
@@ -170,9 +197,12 @@ class IpcBackend:
             footprints = board.get_footprints()
             return [
                 {
-                    "reference": fp.reference_field.text,
-                    "value": fp.value_field.text if fp.value_field else "",
-                    "position": {"x": fp.position.x, "y": fp.position.y},
+                    "reference": self._fp_ref(fp),
+                    "value": self._fp_val(fp),
+                    "position": {
+                        "x": self._nm_to_mm(fp.position.x),
+                        "y": self._nm_to_mm(fp.position.y),
+                    },
                     "rotation": fp.orientation if hasattr(fp, "orientation") else 0,
                     "layer": fp.layer if hasattr(fp, "layer") else "",
                 }
@@ -191,7 +221,7 @@ class IpcBackend:
             for item in selection:
                 entry: dict[str, Any] = {"type": type(item).__name__}
                 if hasattr(item, "reference_field"):
-                    entry["reference"] = item.reference_field.text
+                    entry["reference"] = self._fp_ref(item)
                 if hasattr(item, "position"):
                     entry["position"] = {"x": item.position.x, "y": item.position.y}
                 items.append(entry)
@@ -207,8 +237,8 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             fp = self._find_footprint_by_ref(board, reference)
-            fp.position.x = x
-            fp.position.y = y
+            fp.position.x = self._mm_to_nm(x)
+            fp.position.y = self._mm_to_nm(y)
             board.update_footprint(fp)
         except IpcError:
             raise
@@ -281,10 +311,10 @@ class IpcBackend:
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    @staticmethod
-    def _find_footprint_by_ref(board: Any, reference: str) -> Any:
+    @classmethod
+    def _find_footprint_by_ref(cls, board: Any, reference: str) -> Any:
         """Find a footprint on the kipy board by reference designator."""
         for fp in board.get_footprints():
-            if fp.reference_field.text == reference:
+            if cls._fp_ref(fp) == reference:
                 return fp
         raise IpcError(f"Component {reference!r} not found on the live board")
