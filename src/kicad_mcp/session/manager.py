@@ -36,6 +36,27 @@ _LAYER_FLIP: dict[str, str] = {
     "B.Adhes": "F.Adhes",
 }
 
+# Display name → internal name mapping for KiCad layers.
+# kicad-cli and older S-expression files use internal names (e.g. "F.SilkS"),
+# but KiCad 9 UI and some callers use display names (e.g. "F.Silkscreen").
+_LAYER_ALIASES: dict[str, str] = {
+    "F.Silkscreen": "F.SilkS",
+    "B.Silkscreen": "B.SilkS",
+    "F.Adhesive": "F.Adhes",
+    "B.Adhesive": "B.Adhes",
+    "F.Courtyard": "F.CrtYd",
+    "B.Courtyard": "B.CrtYd",
+    "User.Drawings": "Dwgs.User",
+    "User.Comments": "Cmts.User",
+    "User.Eco1": "Eco1.User",
+    "User.Eco2": "Eco2.User",
+}
+
+
+def _normalize_layer(name: str) -> str:
+    """Map display-name layer aliases to internal KiCad names."""
+    return _LAYER_ALIASES.get(name, name)
+
 
 class SessionState(Enum):
     ACTIVE = "active"
@@ -751,6 +772,8 @@ class SessionManager:
         if len(points) < 3:
             raise ValueError("Zone polygon requires at least 3 points")
 
+        layer = _normalize_layer(layer)
+
         # Find the net number
         net_num = None
         for net_node in session._working_doc.root.find_all("net"):
@@ -820,6 +843,8 @@ class SessionManager:
         self._require_active(session)
         assert session._working_doc is not None
 
+        layer = _normalize_layer(layer)
+
         seg_uuid = str(uuid.uuid4())
         seg_text = (
             f"(segment (start {start_x} {start_y}) (end {end_x} {end_y})"
@@ -867,6 +892,8 @@ class SessionManager:
         """
         self._require_active(session)
         assert session._working_doc is not None
+
+        layers = (_normalize_layer(layers[0]), _normalize_layer(layers[1]))
 
         via_uuid = str(uuid.uuid4())
         via_text = (
@@ -1241,6 +1268,8 @@ class SessionManager:
         """
         self._require_active(session)
         assert session._working_doc is not None
+
+        layer = _normalize_layer(layer)
 
         text_uuid = str(uuid.uuid4())
         angle_str = f" {angle}" if angle != 0 else ""
