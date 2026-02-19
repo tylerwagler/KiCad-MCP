@@ -9,6 +9,7 @@ with timeouts and command validation.
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import os
@@ -81,7 +82,10 @@ class KiCadCli:
 
     def _run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         """Run a kicad-cli command with timeout and error handling."""
+        from ..security import SecureSubprocess
+
         cmd = [self.cli_path] + args
+        SecureSubprocess().validate_command(cmd)
         try:
             result = subprocess.run(
                 cmd,
@@ -148,40 +152,46 @@ class KiCadCli:
             raise FileNotFoundError(f"Board not found: {board_path}")
 
         # Create temp output file if none specified
-        if output_path is None:
+        _created_temp = output_path is None
+        if _created_temp:
             fd, output_path = tempfile.mkstemp(suffix=".json", prefix="drc_")
             os.close(fd)
 
-        args = [
-            "pcb",
-            "drc",
-            "--format",
-            "json",
-            "--output",
-            output_path,
-            "--severity-all",
-            "--units",
-            "mm",
-            board_path,
-        ]
-
-        result = self._run(args)
-
-        # Parse JSON report
         try:
-            report = json.loads(Path(output_path).read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, FileNotFoundError):
-            # JSON not produced — kicad-cli likely failed to run DRC
-            message = self._format_error(result, "kicad-cli produced no DRC report")
-            return DrcResult(
-                passed=False,
-                error_count=0,
-                warning_count=0,
-                report_path=output_path,
-                message=f"DRC report unavailable: {message}",
-            )
+            args = [
+                "pcb",
+                "drc",
+                "--format",
+                "json",
+                "--output",
+                output_path,
+                "--severity-all",
+                "--units",
+                "mm",
+                board_path,
+            ]
 
-        return self._parse_drc_report(report, output_path, result.stderr.strip())
+            result = self._run(args)
+
+            # Parse JSON report
+            try:
+                report = json.loads(Path(output_path).read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, FileNotFoundError):
+                # JSON not produced — kicad-cli likely failed to run DRC
+                message = self._format_error(result, "kicad-cli produced no DRC report")
+                return DrcResult(
+                    passed=False,
+                    error_count=0,
+                    warning_count=0,
+                    report_path=output_path,
+                    message=f"DRC report unavailable: {message}",
+                )
+
+            return self._parse_drc_report(report, output_path, result.stderr.strip())
+        finally:
+            if _created_temp:
+                with contextlib.suppress(OSError):
+                    os.unlink(output_path)
 
     @staticmethod
     def _parse_drc_report(report: dict[str, Any], report_path: str, stderr: str = "") -> DrcResult:

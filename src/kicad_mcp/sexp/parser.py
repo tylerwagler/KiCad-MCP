@@ -107,6 +107,8 @@ class SExp:
         """Serialize back to S-expression string.
 
         Uses _original_str for atoms to preserve number formatting.
+        List nodes with only atom children stay on one line.
+        List nodes with nested list children use multi-line indented format.
         """
         if self.is_atom:
             if self._original_str is not None:
@@ -120,7 +122,30 @@ class SExp:
             parts.append(self.name)
         for child in self.children:
             parts.append(child.to_string(indent))
-        return "(" + " ".join(parts) + ")"
+
+        # If no children have nested lists, stay on one line
+        has_nested = any(child.is_list for child in self.children)
+        if not has_nested:
+            return "(" + " ".join(parts) + ")"
+
+        # Multi-line with indentation
+        prefix = "  " * indent
+        child_prefix = "  " * (indent + 1)
+        lines: list[str] = []
+        # Opening: name on same line
+        lines.append(prefix + "(" + (self.name or ""))
+        for child in self.children:
+            if child.is_atom:
+                # Inline atoms after the name on the first line
+                lines[0] += " " + child.to_string(indent + 1)
+            else:
+                lines.append(child_prefix + child.to_string(indent + 1).lstrip())
+        lines[-1] += ")"
+        if indent == 0:
+            return "\n".join(lines)
+        # Strip the leading prefix since the caller adds its own
+        result = "\n".join(lines)
+        return result[len(prefix) :]
 
     def __repr__(self) -> str:
         if self.is_atom:

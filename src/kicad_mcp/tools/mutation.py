@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from .registry import register_tool
 
-# Module-level session manager instance
+# Module-level session manager instance (thread-safe lazy init)
 _session_manager = None
+_mgr_lock = threading.Lock()
 
 
 def _get_manager():
     global _session_manager
     if _session_manager is None:
-        from ..session import SessionManager
+        with _mgr_lock:
+            if _session_manager is None:
+                from ..session import SessionManager
 
-        _session_manager = SessionManager()
+                _session_manager = SessionManager()
     return _session_manager
 
 

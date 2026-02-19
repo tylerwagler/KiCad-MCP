@@ -1359,12 +1359,12 @@ class TestSessionIpcIntegration:
 
     def test_parse_at_coords(self) -> None:
         """Test the _parse_at_coords helper."""
-        from kicad_mcp.session.manager import SessionManager
+        from kicad_mcp.session.ipc_ops import parse_at_coords
 
-        assert SessionManager._parse_at_coords("(at 25.0 30.0)") == (25.0, 30.0)
-        assert SessionManager._parse_at_coords("(at 10 20 90)") == (10.0, 20.0)
-        assert SessionManager._parse_at_coords("(not_at 1 2)") == (None, None)
-        assert SessionManager._parse_at_coords("") == (None, None)
+        assert parse_at_coords("(at 25.0 30.0)") == (25.0, 30.0)
+        assert parse_at_coords("(at 10 20 90)") == (10.0, 20.0)
+        assert parse_at_coords("(not_at 1 2)") == (None, None)
+        assert parse_at_coords("") == (None, None)
 
     def test_rollback_reverses_ipc_move(self, tmp_path: Any) -> None:
         """Rollback reverses IPC changes back to original state."""
@@ -1596,12 +1596,12 @@ class TestSessionIpcIntegration:
 
     def test_parse_segment_snapshot(self) -> None:
         """Test parsing segment S-expression."""
-        from kicad_mcp.session.manager import SessionManager
+        from kicad_mcp.session.ipc_ops import parse_segment_snapshot
 
         snapshot = (
             '(segment (start 10 10) (end 20 20) (width 0.25) (layer "F.Cu") (net 1) (uuid "abc"))'
         )
-        params = SessionManager._parse_segment_snapshot(snapshot)
+        params = parse_segment_snapshot(snapshot)
 
         assert params is not None
         assert params["start_x"] == 10.0
@@ -1614,12 +1614,12 @@ class TestSessionIpcIntegration:
 
     def test_parse_via_snapshot(self) -> None:
         """Test parsing via S-expression."""
-        from kicad_mcp.session.manager import SessionManager
+        from kicad_mcp.session.ipc_ops import parse_via_snapshot
 
         snapshot = (
             '(via (at 15 15) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid "def"))'
         )
-        params = SessionManager._parse_via_snapshot(snapshot)
+        params = parse_via_snapshot(snapshot)
 
         assert params is not None
         assert params["x"] == 15.0
@@ -1632,13 +1632,13 @@ class TestSessionIpcIntegration:
 
     def test_parse_zone_snapshot(self) -> None:
         """Test parsing zone S-expression."""
-        from kicad_mcp.session.manager import SessionManager
+        from kicad_mcp.session.ipc_ops import parse_zone_snapshot
 
         snapshot = (
             '(zone (net 1) (layers "F.Cu") (priority 0) '
             "(polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))))"
         )
-        params = SessionManager._parse_zone_snapshot(snapshot)
+        params = parse_zone_snapshot(snapshot)
 
         assert params is not None
         assert params["net"] == 1

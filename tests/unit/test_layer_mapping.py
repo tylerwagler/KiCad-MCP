@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-from kicad_mcp.session.manager import _LAYER_ALIASES, SessionManager, _normalize_layer
+from kicad_mcp.session.manager import SessionManager
+from kicad_mcp.session.types import _LAYER_ALIASES, _normalize_layer
 from kicad_mcp.sexp import Document
 
-BLINKY_PATH = Path(r"C:\Users\tyler\Dev\repos\test_PCB\blinky.kicad_pcb")
+BOARD_PATH = Path(
+    os.environ.get(
+        "KICAD_TEST_BOARD",
+        str(Path(__file__).parent.parent / "fixtures" / "minimal_board.kicad_pcb"),
+    )
+)
 
-skip_no_board = pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
+skip_no_board = pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
 
 
 class TestNormalizeLayer:
@@ -41,7 +48,7 @@ class TestLayerMappingIntegration:
     """Integration tests: display-name layers produce correct S-expression."""
 
     def _make_session(self):
-        doc = Document.load(str(BLINKY_PATH))
+        doc = Document.load(str(BOARD_PATH))
         mgr = SessionManager()
         return mgr, mgr.start_session(doc)
 

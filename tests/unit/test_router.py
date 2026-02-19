@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from kicad_mcp.tools import TOOL_REGISTRY, get_categories
 
-BLINKY_PATH = Path(r"C:\Users\tyler\Dev\repos\test_PCB\blinky.kicad_pcb")
+# Default to the synthetic fixture; override with KICAD_TEST_BOARD env var
+FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "minimal_board.kicad_pcb"
+BOARD_PATH = Path(os.environ.get("KICAD_TEST_BOARD", str(FIXTURE_PATH)))
 
 
 class TestToolRegistry:
@@ -47,42 +50,41 @@ class TestRouterDispatch:
 
     @pytest.fixture(autouse=True)
     def _load_board(self) -> None:
-        if BLINKY_PATH.exists():
+        if BOARD_PATH.exists():
             from kicad_mcp import state
 
-            state.load_board(str(BLINKY_PATH))
+            state.load_board(str(BOARD_PATH))
 
-    @pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
+    @pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
     def test_execute_get_net_list(self) -> None:
         handler = TOOL_REGISTRY["get_net_list"].handler
         result = handler()
-        assert result["count"] == 9
+        assert result["count"] >= 3
 
-    @pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
+    @pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
     def test_execute_get_layer_stack(self) -> None:
         handler = TOOL_REGISTRY["get_layer_stack"].handler
         result = handler()
         assert len(result["copper_layers"]) == 2
 
-    @pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
+    @pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
     def test_execute_get_board_extents(self) -> None:
         handler = TOOL_REGISTRY["get_board_extents"].handler
         result = handler()
         assert result["has_outline"] is True
         assert result["bounding_box"]["width"] > 0
 
-    @pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
+    @pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
     def test_execute_get_component_details(self) -> None:
         handler = TOOL_REGISTRY["get_component_details"].handler
-        result = handler(reference="C7")
+        result = handler(reference="R1")
         assert result["found"] is True
         assert result["pad_count"] == 2
 
-    @pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
+    @pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
     def test_execute_get_net_connections(self) -> None:
         handler = TOOL_REGISTRY["get_net_connections"].handler
-        result = handler(net_name="VBUS")
-        # Pads may or may not have net assignments depending on board state
+        result = handler(net_name="VCC")
         assert "connection_count" in result
         assert "connections" in result
 

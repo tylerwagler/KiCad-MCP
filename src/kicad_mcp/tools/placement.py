@@ -6,30 +6,12 @@ from typing import Any
 
 from .registry import register_tool
 
-# Reuse the module-level session manager from mutation.py
-_session_manager = None
-
-
-def _get_manager():
-    global _session_manager
-    if _session_manager is None:
-        from ..session import SessionManager
-
-        _session_manager = SessionManager()
-    return _session_manager
-
-
-def _get_session(session_id: str):
-    from .mutation import _get_manager as _get_mutation_manager
-
-    return _get_mutation_manager().get_session(session_id)
-
 
 def _get_mgr():
     """Get the mutation module's session manager (shared singleton)."""
-    from .mutation import _get_manager as _get_mutation_manager
+    from .mutation import _get_manager
 
-    return _get_mutation_manager()
+    return _get_manager()
 
 
 # ── Handlers ────────────────────────────────────────────────────────
@@ -86,6 +68,13 @@ def _place_from_library_handler(
         y: Y position in mm.
         layer: Target layer. Defaults to "F.Cu".
     """
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_input(kicad_mod_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
+
     mgr = _get_mgr()
     try:
         session = mgr.get_session(session_id)

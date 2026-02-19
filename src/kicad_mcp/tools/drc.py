@@ -16,6 +16,14 @@ def _run_drc_handler(output_path: str | None = None) -> dict[str, Any]:
     from .. import state
     from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
 
+    if output_path is not None:
+        from ..security import SecurityError, get_validator
+
+        try:
+            get_validator().validate_output(output_path)
+        except SecurityError as exc:
+            return {"error": f"Security error: {exc}"}
+
     board_path = state.get_board_path()
     if not board_path:
         return {"error": "No board loaded. Use open_project first."}

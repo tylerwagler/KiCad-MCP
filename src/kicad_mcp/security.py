@@ -6,6 +6,7 @@ limits subprocess commands to a known-safe whitelist.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -90,6 +91,39 @@ ALLOWED_CLI_SUBCOMMANDS = frozenset(
 
 class SecurityError(Exception):
     """Raised when a security check fails."""
+
+
+# ── Singleton helpers ───────────────────────────────────────────────
+
+_validator: PathValidator | None = None
+_validator_lock = threading.Lock()
+
+
+def get_validator() -> PathValidator:
+    """Get the shared PathValidator singleton (thread-safe lazy init).
+
+    Starts with no trusted roots — only extension checking is active.
+    Call ``add_trusted_root()`` when a board is opened to restrict
+    paths to the project directory.
+    """
+    global _validator
+    if _validator is None:
+        with _validator_lock:
+            if _validator is None:
+                _validator = PathValidator()
+    return _validator
+
+
+def add_trusted_root(path: str | Path) -> None:
+    """Register a trusted root directory in the shared validator.
+
+    Called when ``open_project`` loads a board so that subsequent
+    path validations can verify files live under the project tree.
+    """
+    validator = get_validator()
+    resolved = Path(path).resolve()
+    if resolved not in validator.trusted_roots:
+        validator.trusted_roots.append(resolved)
 
 
 class PathValidator:

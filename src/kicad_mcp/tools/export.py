@@ -15,6 +15,12 @@ def _export_gerbers_handler(output_dir: str) -> dict[str, Any]:
     """
     from .. import state
     from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_directory(output_dir)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
 
     board_path = state.get_board_path()
     if not board_path:
@@ -47,6 +53,12 @@ def _export_pdf_handler(output_path: str, layers: str | None = None) -> dict[str
     """
     from .. import state
     from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_output(output_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
 
     board_path = state.get_board_path()
     if not board_path:
@@ -74,6 +86,12 @@ def _export_svg_handler(output_path: str, layers: str | None = None) -> dict[str
     """
     from .. import state
     from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_output(output_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
 
     board_path = state.get_board_path()
     if not board_path:
@@ -100,6 +118,12 @@ def _export_step_handler(output_path: str) -> dict[str, Any]:
     """
     from .. import state
     from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_output(output_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
 
     board_path = state.get_board_path()
     if not board_path:
@@ -126,6 +150,12 @@ def _export_pos_handler(output_path: str, side: str = "both") -> dict[str, Any]:
     """
     from .. import state
     from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_output(output_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
 
     board_path = state.get_board_path()
     if not board_path:
@@ -247,6 +277,12 @@ def _export_vrml_handler(output_path: str) -> dict[str, Any]:
     """
     from .. import state
     from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_output(output_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
 
     board_path = state.get_board_path()
     if not board_path:

@@ -61,7 +61,7 @@ class Document:
             The path the file was written to.
         """
         target = Path(path) if path is not None else self.path
-        text = self.root.to_string()
+        text = self.root.to_string() + "\n"
         target.write_text(text, encoding="utf-8")
         return target
 

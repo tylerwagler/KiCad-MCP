@@ -17,7 +17,17 @@ def _open_project_handler(board_path: str) -> dict[str, Any]:
     Args:
         board_path: Path to a .kicad_pcb file.
     """
+    from pathlib import Path
+
     from .. import state
+    from ..security import SecurityError, add_trusted_root, get_validator
+
+    try:
+        get_validator().validate_input(board_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
+
+    add_trusted_root(Path(board_path).resolve().parent)
 
     summary = state.load_board(board_path)
     return {

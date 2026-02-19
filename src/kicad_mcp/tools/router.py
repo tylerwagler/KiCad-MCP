@@ -44,11 +44,19 @@ def _truncate_response(result: dict[str, Any]) -> dict[str, Any]:
     if largest_key is None or largest_len == 0:
         return result
 
+    # Pre-populate metadata so the binary search accounts for their size
+    original_list = result[largest_key]
+    result["_truncated"] = True
+    result["_message"] = (
+        f"Response truncated: '{largest_key}' reduced from {largest_len} to {largest_len} items. "
+        "Use limit/offset parameters or search_* tools for narrower results."
+    )
+
     # Binary-search for a list length that fits
     lo, hi = 0, largest_len
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        result[largest_key] = result[largest_key][:mid]
+        result[largest_key] = original_list[:mid]
         try:
             if len(json.dumps(result, default=str)) <= MAX_RESPONSE_CHARS:
                 lo = mid
@@ -57,8 +65,7 @@ def _truncate_response(result: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             hi = mid - 1
 
-    result[largest_key] = result[largest_key][:lo]
-    result["_truncated"] = True
+    result[largest_key] = original_list[:lo]
     result["_message"] = (
         f"Response truncated: '{largest_key}' reduced from {largest_len} to {lo} items. "
         "Use limit/offset parameters or search_* tools for narrower results."
@@ -121,7 +128,9 @@ def register_router_tools(mcp: FastMCP) -> None:
         }
 
     @mcp.tool()
-    def execute_tool(tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def execute_tool(
+        tool_name: str, arguments: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Execute a tool by name with the given arguments.
 
         Use list_tool_categories and get_category_tools to discover available tools,
@@ -143,12 +152,9 @@ def register_router_tools(mcp: FastMCP) -> None:
         args = arguments or {}
 
         try:
-            # Call the handler, supporting both sync and async
             result = spec.handler(**args)
             if inspect.isawaitable(result):
-                import asyncio
-
-                result = asyncio.get_event_loop().run_until_complete(result)
+                result = await result
             if isinstance(result, dict):
                 result = _truncate_response(result)
             return result  # type: ignore[no-any-return]

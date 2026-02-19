@@ -8,8 +8,11 @@ import pytest
 
 from kicad_mcp.sexp import Document, parse, parse_all
 
-# Path to the test fixture — a real KiCad 9 board
-BLINKY_PATH = Path(r"C:\Users\tyler\Dev\repos\test_PCB\blinky.kicad_pcb")
+# Default to the synthetic fixture; override with KICAD_TEST_BOARD env var
+import os
+
+FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "minimal_board.kicad_pcb"
+BOARD_PATH = Path(os.environ.get("KICAD_TEST_BOARD", str(FIXTURE_PATH)))
 
 
 class TestParseAtoms:
@@ -126,7 +129,9 @@ class TestRoundTrip:
     def test_nested_round_trip(self) -> None:
         original = "(a (b c) (d e))"
         tree = parse(original)
-        assert tree.to_string() == original
+        # Now multi-line because of nested list children
+        expected = "(a\n  (b c)\n  (d e))"
+        assert tree.to_string() == expected
 
     def test_quoted_string_round_trip(self) -> None:
         original = '(generator "pcbnew")'
@@ -149,7 +154,32 @@ class TestRoundTrip:
             ' (layers "F.Cu" "F.Mask" "F.Paste") (roundrect_rratio 0.25))'
         )
         tree = parse(original)
-        assert tree.to_string() == original
+        # Now multi-line because of nested list children
+        expected = (
+            '(pad "1" smd roundrect\n'
+            "  (at -0.95 0)\n"
+            "  (size 1 1.45)\n"
+            '  (layers "F.Cu" "F.Mask" "F.Paste")\n'
+            "  (roundrect_rratio 0.25))"
+        )
+        assert tree.to_string() == expected
+
+    def test_flat_stays_single_line(self) -> None:
+        """Nodes with only atom children stay on one line."""
+        tree = parse("(size 1 1.45)")
+        assert tree.to_string() == "(size 1 1.45)"
+
+    def test_indented_output(self) -> None:
+        """Verify multi-level indentation."""
+        tree = parse("(root (child (grandchild val)))")
+        expected = "(root\n  (child\n    (grandchild val)))"
+        assert tree.to_string() == expected
+
+    def test_deeply_nested_indentation(self) -> None:
+        """Verify 3+ levels of indentation."""
+        tree = parse("(a (b (c (d value))))")
+        expected = "(a\n  (b\n    (c\n      (d value))))"
+        assert tree.to_string() == expected
 
 
 class TestParseAll:
@@ -161,13 +191,13 @@ class TestParseAll:
         assert nodes[2].name == "c"
 
 
-@pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
-class TestBlinkyPCB:
-    """Integration tests using the real blinky.kicad_pcb fixture."""
+@pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
+class TestBoardFixture:
+    """Integration tests using the board fixture."""
 
     @pytest.fixture()
     def doc(self) -> Document:
-        return Document.load(BLINKY_PATH)
+        return Document.load(BOARD_PATH)
 
     def test_load_succeeds(self, doc: Document) -> None:
         assert doc.root.name == "kicad_pcb"
@@ -181,11 +211,11 @@ class TestBlinkyPCB:
     def test_layers(self, doc: Document) -> None:
         layers_node = doc.root["layers"]
         layer_nodes = [c for c in layers_node.children if c.is_list]
-        assert len(layer_nodes) >= 20  # KiCad 9 has ~26 default layers
+        assert len(layer_nodes) >= 12
 
     def test_nets(self, doc: Document) -> None:
         nets = doc.root.find_all("net")
-        assert len(nets) == 9  # 0 (unnamed) + 8 named nets
+        assert len(nets) >= 3
 
     def test_net_names(self, doc: Document) -> None:
         nets = doc.root.find_all("net")
@@ -194,16 +224,15 @@ class TestBlinkyPCB:
             vals = net.atom_values
             if len(vals) >= 2:
                 net_names.append(vals[1])
-        assert "VBUS" in net_names
-        assert "LED1" in net_names
+        assert "VCC" in net_names
+        assert "GND" in net_names
 
     def test_footprints(self, doc: Document) -> None:
         footprints = doc.root.find_all("footprint")
-        assert len(footprints) == 29
+        assert len(footprints) >= 3
 
     def test_footprint_reference(self, doc: Document) -> None:
         footprints = doc.root.find_all("footprint")
-        # Find a capacitor footprint and check its reference
         fp = footprints[0]
         ref_prop = None
         for prop in fp.find_all("property"):
@@ -219,12 +248,12 @@ class TestBlinkyPCB:
 
     def test_title_block(self, doc: Document) -> None:
         title_block = doc.root["title_block"]
-        assert title_block["title"].first_value == "blinky"
+        assert title_block["title"].first_value == "minimal_board"
 
     def test_document_file_type(self, doc: Document) -> None:
         assert doc.file_type == "kicad_pcb"
 
     def test_document_repr(self, doc: Document) -> None:
         r = repr(doc)
-        assert "blinky" in r
+        assert "minimal_board" in r
         assert "kicad_pcb" in r

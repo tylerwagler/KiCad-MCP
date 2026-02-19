@@ -3,11 +3,13 @@
 These tests exercise the full flow through tool handlers:
   open_project -> start_session -> mutate -> commit_session -> verify on disk
 
-Tests that need the blinky board fixture are skipped in CI.
+Uses the synthetic minimal_board fixture by default.
+Override with KICAD_TEST_BOARD env var.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -16,9 +18,11 @@ import pytest
 
 from kicad_mcp.sexp import Document
 
-BLINKY_PATH = Path(r"C:\Users\tyler\Dev\repos\test_PCB\blinky.kicad_pcb")
+# Default to the synthetic fixture; override with KICAD_TEST_BOARD env var
+FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "minimal_board.kicad_pcb"
+BOARD_PATH = Path(os.environ.get("KICAD_TEST_BOARD", str(FIXTURE_PATH)))
 
-skip_no_board = pytest.mark.skipif(not BLINKY_PATH.exists(), reason="Test fixture not available")
+skip_no_board = pytest.mark.skipif(not BOARD_PATH.exists(), reason="Test fixture not available")
 
 # Check for KiCad libraries (needed for library-resolved placement)
 _RESISTOR_MOD = Path(
@@ -31,9 +35,9 @@ skip_no_libs = pytest.mark.skipif(
 
 
 def _copy_board_to_tmp(tmpdir: str) -> str:
-    """Copy the blinky board to a temp directory for safe mutation."""
-    dest = str(Path(tmpdir) / "blinky.kicad_pcb")
-    shutil.copy2(str(BLINKY_PATH), dest)
+    """Copy the board fixture to a temp directory for safe mutation."""
+    dest = str(Path(tmpdir) / "test_board.kicad_pcb")
+    shutil.copy2(str(BOARD_PATH), dest)
     return dest
 
 
@@ -53,8 +57,8 @@ class TestMoveCommitWorkflow:
             start = TOOL_REGISTRY["start_session"].handler()
             sid = start["session_id"]
 
-            # Move C7
-            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="C7", x=99.0, y=88.0)
+            # Move R1
+            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="R1", x=99.0, y=88.0)
 
             # Commit
             result = TOOL_REGISTRY["commit_session"].handler(session_id=sid)
@@ -64,12 +68,12 @@ class TestMoveCommitWorkflow:
             doc = Document.load(board_path)
             for fp in doc.root.find_all("footprint"):
                 for prop in fp.find_all("property"):
-                    if prop.first_value == "Reference" and prop.atom_values[1] == "C7":
+                    if prop.first_value == "Reference" and prop.atom_values[1] == "R1":
                         at = fp.get("at")
                         assert float(at.atom_values[0]) == 99.0
                         assert float(at.atom_values[1]) == 88.0
                         return
-            pytest.fail("C7 not found after commit")
+            pytest.fail("R1 not found after commit")
 
 
 @skip_no_board
@@ -88,7 +92,7 @@ class TestRollbackWorkflow:
             # Start session and make a change
             start = TOOL_REGISTRY["start_session"].handler()
             sid = start["session_id"]
-            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="C7", x=999.0, y=999.0)
+            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="R1", x=999.0, y=999.0)
 
             # Rollback
             result = TOOL_REGISTRY["rollback_session"].handler(session_id=sid)
@@ -125,10 +129,10 @@ class TestMultiOperationSession:
             )
 
             # Move an existing component
-            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="C7", x=50.0, y=50.0)
+            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="R1", x=50.0, y=50.0)
 
             # Rotate another
-            TOOL_REGISTRY["rotate_component"].handler(session_id=sid, reference="R2", angle=45.0)
+            TOOL_REGISTRY["rotate_component"].handler(session_id=sid, reference="C1", angle=45.0)
 
             # Commit all three
             result = TOOL_REGISTRY["commit_session"].handler(session_id=sid)
@@ -157,37 +161,30 @@ class TestUndoCommitWorkflow:
             board_path = _copy_board_to_tmp(tmpdir)
             state.load_board(board_path)
 
-            # Get original C7 position
-            doc_before = Document.load(board_path)
-            for fp in doc_before.root.find_all("footprint"):
-                for prop in fp.find_all("property"):
-                    if prop.first_value == "Reference" and prop.atom_values[1] == "C7":
-                        pass  # Just verifying C7 exists
-
             start = TOOL_REGISTRY["start_session"].handler()
             sid = start["session_id"]
 
-            # Move C7 to new position
-            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="C7", x=99.0, y=88.0)
+            # Move R1 to new position
+            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="R1", x=99.0, y=88.0)
 
-            # Move R2 to new position
-            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="R2", x=77.0, y=66.0)
+            # Move C1 to new position
+            TOOL_REGISTRY["apply_move"].handler(session_id=sid, reference="C1", x=77.0, y=66.0)
 
-            # Undo the R2 move (last operation)
+            # Undo the C1 move (last operation)
             TOOL_REGISTRY["undo_change"].handler(session_id=sid)
 
-            # Commit — only the C7 move should persist
+            # Commit — only the R1 move should persist
             TOOL_REGISTRY["commit_session"].handler(session_id=sid)
 
             doc_after = Document.load(board_path)
             for fp in doc_after.root.find_all("footprint"):
                 for prop in fp.find_all("property"):
-                    if prop.first_value == "Reference" and prop.atom_values[1] == "C7":
+                    if prop.first_value == "Reference" and prop.atom_values[1] == "R1":
                         at = fp.get("at")
                         assert float(at.atom_values[0]) == 99.0
                         assert float(at.atom_values[1]) == 88.0
-                    elif prop.first_value == "Reference" and prop.atom_values[1] == "R2":
-                        # R2 should NOT be at 77, 66 (that was undone)
+                    elif prop.first_value == "Reference" and prop.atom_values[1] == "C1":
+                        # C1 should NOT be at 77, 66 (that was undone)
                         at = fp.get("at")
                         assert float(at.atom_values[0]) != 77.0
 
@@ -406,7 +403,7 @@ class TestEditReplaceIntegration:
 
             TOOL_REGISTRY["edit_component"].handler(
                 session_id=sid,
-                reference="C7",
+                reference="R1",
                 properties={"Value": "22uF"},
             )
 
@@ -415,12 +412,12 @@ class TestEditReplaceIntegration:
             doc = Document.load(board_path)
             for fp in doc.root.find_all("footprint"):
                 for prop in fp.find_all("property"):
-                    if prop.first_value == "Reference" and prop.atom_values[1] == "C7":
+                    if prop.first_value == "Reference" and prop.atom_values[1] == "R1":
                         for vp in fp.find_all("property"):
                             if vp.first_value == "Value":
                                 assert vp.atom_values[1] == "22uF"
                                 return
-            pytest.fail("C7 value not updated on disk")
+            pytest.fail("R1 value not updated on disk")
 
     def test_delete_component_commit(self) -> None:
         from kicad_mcp import state
@@ -433,7 +430,7 @@ class TestEditReplaceIntegration:
             start = TOOL_REGISTRY["start_session"].handler()
             sid = start["session_id"]
 
-            TOOL_REGISTRY["delete_component"].handler(session_id=sid, reference="C7")
+            TOOL_REGISTRY["delete_component"].handler(session_id=sid, reference="R1")
             TOOL_REGISTRY["commit_session"].handler(session_id=sid)
 
             doc = Document.load(board_path)
@@ -442,4 +439,4 @@ class TestEditReplaceIntegration:
                 for prop in fp.find_all("property"):
                     if prop.first_value == "Reference":
                         refs.append(prop.atom_values[1])
-            assert "C7" not in refs
+            assert "R1" not in refs
