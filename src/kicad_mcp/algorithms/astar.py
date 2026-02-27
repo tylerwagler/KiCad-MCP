@@ -97,6 +97,7 @@ def astar_search(
 
     came_from: dict[Node, Node] = {}
     g_score: dict[Node, float] = {start: 0.0}
+    closed_set: set[Node] = set()
 
     iterations = 0
 
@@ -106,6 +107,11 @@ def astar_search(
             return None  # safety limit
 
         _, _, current = heapq.heappop(open_set)
+
+        # Skip if already processed (found a better path)
+        if current in closed_set:
+            continue
+        closed_set.add(current)
 
         if current == goal:
             # Reconstruct path
