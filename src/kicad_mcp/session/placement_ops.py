@@ -5,8 +5,9 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from ..security import SecurityError
 from ..sexp import SExp
-from ..sexp.parser import parse as sexp_parse
+from ..sexp.parser import _quote_if_needed, parse as sexp_parse
 from .helpers import find_footprint
 from .types import (
     _LAYER_FLIP,
@@ -355,16 +356,27 @@ def _build_footprint_node(
     layer: str,
 ) -> SExp:
     """Build a minimal footprint S-expression node (skeleton fallback)."""
+    # Validate inputs to prevent S-expression injection
+    if not library:
+        raise SecurityError("Library name cannot be empty")
+    if not reference:
+        raise SecurityError("Reference cannot be empty")
+    if not value:
+        raise SecurityError("Value cannot be empty")
+    if not layer:
+        raise SecurityError("Layer cannot be empty")
+
     new_uuid = str(uuid.uuid4())
+    # Use _quote_if_needed to escape special characters in strings
     sexp_text = (
-        f'(footprint "{library}"'
-        f' (layer "{layer}")'
+        f"(footprint {_quote_if_needed(library)}"
+        f" (layer {_quote_if_needed(layer)})"
         f' (uuid "{new_uuid}")'
         f" (at {x} {y})"
-        f' (property "Reference" "{reference}"'
-        f' (at 0 -1.5 0) (layer "{layer}") (uuid "{uuid.uuid4()}")'
+        f' (property "Reference" {_quote_if_needed(reference)}'
+        f' (at 0 -1.5 0) (layer {_quote_if_needed(layer)}) (uuid "{uuid.uuid4()}")'
         f" (effects (font (size 1 1) (thickness 0.15))))"
-        f' (property "Value" "{value}"'
+        f' (property "Value" {_quote_if_needed(value)}'
         f' (at 0 1.5 0) (layer "F.Fab") (uuid "{uuid.uuid4()}")'
         f" (effects (font (size 1 1) (thickness 0.15))))"
         f" (attr smd) (embedded_fonts no))"
