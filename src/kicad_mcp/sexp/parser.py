@@ -153,6 +153,25 @@ class SExp:
         child_count = len(self.children)
         return f"SExp(name={self.name!r}, children={child_count})"
 
+    def deep_copy(self) -> SExp:
+        """Create a deep copy of this S-expression tree.
+
+        Returns:
+            A new SExp node with all children recursively copied.
+        """
+        if self.is_atom:
+            return SExp(
+                value=self.value,
+                _original_str=self._original_str,
+            )
+
+        # Deep copy all children
+        new_children = [child.deep_copy() for child in self.children]
+        return SExp(
+            name=self.name,
+            children=new_children,
+        )
+
 
 def _quote_if_needed(s: str) -> str:
     """Quote a string if it contains special characters."""

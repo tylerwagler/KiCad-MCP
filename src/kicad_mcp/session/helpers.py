@@ -86,6 +86,9 @@ def find_module_by_uuid(doc: Document, uuid: str) -> SExp | None:
 def deep_copy_doc(doc: Document) -> Document:
     """Create a deep copy of a Document for working changes.
 
+    Uses SExp.deep_copy() for O(tree_nodes) performance instead of
+    re-parsing which is O(file_size).
+
     Args:
         doc: The Document to copy.
 
@@ -93,12 +96,14 @@ def deep_copy_doc(doc: Document) -> Document:
         A new Document with a fresh copy of the S-expression tree.
 
     Raises:
-        ValueError: If the raw text cannot be parsed.
+        ValueError: If the document cannot be copied.
     """
-    if not doc._raw_text:
-        raise ValueError("Cannot copy empty Document")
     try:
-        new_root = sexp_parse(doc._raw_text)
-    except ValueError as e:
+        new_root = doc.root.deep_copy()
+    except Exception as e:
         raise ValueError(f"Failed to copy document: {e}") from e
+
+    # Re-parse raw_text for any modifications, or use a fresh copy
+    # Since we just copied the tree, preserve the original raw_text
+    # but allow for re-serialization if needed
     return Document(path=doc.path, root=new_root, raw_text=doc._raw_text)
