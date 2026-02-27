@@ -26,7 +26,8 @@ from .registry import TOOL_REGISTRY, get_categories
 MAX_RESPONSE_CHARS = 50_000  # ~12k tokens
 
 # Global rate limiter with per-tool and per-session limits
-_rate_limit_buckets: dict[str, float] = defaultdict(lambda: 0.0)
+# Stores list of request timestamps per tool for sliding window rate limiting
+_rate_limit_buckets: dict[str, list[float]] = defaultdict(list)
 _rate_lock = asyncio.Lock()
 _RATE_LIMIT_WINDOW = 60.0  # 60 second rolling window
 _MAX_REQUESTS_PER_WINDOW = 100  # Max requests in rolling window
@@ -89,15 +90,16 @@ async def _check_rate_limit(tool_name: str) -> bool:
         current_time = time.time()
         window_start = current_time - _RATE_LIMIT_WINDOW
 
-        # Clean old entries - keep only recent timestamps
-        recent_timestamps = [t for t in _rate_limit_buckets.values() if t > window_start]
+        # Get timestamps for this tool and clean old entries
+        tool_timestamps = _rate_limit_buckets[tool_name]
+        tool_timestamps[:] = [t for t in tool_timestamps if t > window_start]
 
         # Check if adding this request would exceed the limit
-        if len(recent_timestamps) >= _MAX_REQUESTS_PER_WINDOW:
+        if len(tool_timestamps) >= _MAX_REQUESTS_PER_WINDOW:
             return False
 
-        # Add this request timestamp
-        _rate_limit_buckets[tool_name] = current_time
+        # Add this request timestamp (atomic within the lock)
+        tool_timestamps.append(current_time)
         return True
 
 
@@ -107,10 +109,14 @@ def _get_retry_after(tool_name: str) -> float:
     window_start = current_time - _RATE_LIMIT_WINDOW
 
     if tool_name in _rate_limit_buckets:
-        bucket_time = _rate_limit_buckets[tool_name]
-        if bucket_time <= window_start:
+        tool_timestamps = _rate_limit_buckets[tool_name]
+        # Remove old timestamps
+        tool_timestamps[:] = [t for t in tool_timestamps if t > window_start]
+        if not tool_timestamps:
             return 0.0
-        return bucket_time + _RATE_LIMIT_WINDOW - current_time
+        # Get the oldest timestamp in the window
+        oldest = min(tool_timestamps)
+        return oldest + _RATE_LIMIT_WINDOW - current_time
 
     return 0.0
 
