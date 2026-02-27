@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+# Default to the synthetic fixture; override with KICAD_TEST_BOARD env var
+import os
 from pathlib import Path
 
 import pytest
 
 from kicad_mcp.sexp import Document, parse, parse_all
-
-# Default to the synthetic fixture; override with KICAD_TEST_BOARD env var
-import os
 
 FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "minimal_board.kicad_pcb"
 BOARD_PATH = Path(os.environ.get("KICAD_TEST_BOARD", str(FIXTURE_PATH)))

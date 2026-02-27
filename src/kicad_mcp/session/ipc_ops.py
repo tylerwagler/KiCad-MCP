@@ -107,6 +107,12 @@ def parse_at_coords(snapshot: str) -> tuple[float | None, float | None]:
     return None, None
 
 
+def _get_first_value(node: Any, default: str = "") -> str:
+    """Get first_value from SExp node, returning default if None."""
+    val = getattr(node, "first_value", None) if node else None
+    return val if val is not None else default
+
+
 def parse_segment_snapshot(snapshot: str) -> dict[str, Any] | None:
     """Parse segment S-expression."""
     try:
@@ -122,17 +128,33 @@ def parse_segment_snapshot(snapshot: str) -> dict[str, Any] | None:
         layer = node.find("layer")
         net = node.find("net")
 
-        if not all([start, end, width, layer, net]):
+        if start is None or end is None or width is None or layer is None or net is None:
+            return None
+
+        # Extract values with proper None handling
+        start_vals = getattr(start, "atom_values", None)
+        end_vals = getattr(end, "atom_values", None)
+        width_val = getattr(width, "first_value", None)
+        layer_val = getattr(layer, "first_value", None)
+        net_val = getattr(net, "first_value", None)
+
+        if (
+            start_vals is None
+            or end_vals is None
+            or width_val is None
+            or layer_val is None
+            or net_val is None
+        ):
             return None
 
         return {
-            "start_x": float(start.atom_values[0]),
-            "start_y": float(start.atom_values[1]),
-            "end_x": float(end.atom_values[0]),
-            "end_y": float(end.atom_values[1]),
-            "width": float(width.first_value),
-            "layer": layer.first_value.strip('"'),
-            "net": int(net.first_value),
+            "start_x": float(start_vals[0]) if len(start_vals) > 0 else 0.0,
+            "start_y": float(start_vals[1]) if len(start_vals) > 1 else 0.0,
+            "end_x": float(end_vals[0]) if len(end_vals) > 0 else 0.0,
+            "end_y": float(end_vals[1]) if len(end_vals) > 1 else 0.0,
+            "width": float(width_val),
+            "layer": str(layer_val).strip('"'),
+            "net": int(net_val),
         }
     except Exception:
         return None
@@ -153,18 +175,21 @@ def parse_via_snapshot(snapshot: str) -> dict[str, Any] | None:
         layers = node.find("layers")
         net = node.find("net")
 
-        if not all([at, size, drill, layers, net]):
+        if not at or not size or not drill or not layers or not net:
             return None
 
+        # Type: ignore for union-attr - all checked above
         layer_vals = layers.atom_values
+        size_val = size.first_value
+        drill_val = drill.first_value
         return {
             "x": float(at.atom_values[0]),
             "y": float(at.atom_values[1]),
-            "size": float(size.first_value),
-            "drill": float(drill.first_value),
+            "size": float(size_val or 0.0),
+            "drill": float(drill_val or 0.0),
             "layer_start": layer_vals[0].strip('"'),
             "layer_end": layer_vals[1].strip('"'),
-            "net": int(net.first_value),
+            "net": int(net.first_value or 0),
         }
     except Exception:
         return None
@@ -184,11 +209,11 @@ def parse_zone_snapshot(snapshot: str) -> dict[str, Any] | None:
         polygon = node.find("polygon")
         priority_node = node.find("priority")
 
-        if not all([net, layers, polygon]):
+        if net is None or layers is None or polygon is None:
             return None
 
         pts_node = polygon.find("pts")
-        if not pts_node:
+        if pts_node is None:
             return None
 
         outline_points = []
@@ -198,11 +223,13 @@ def parse_zone_snapshot(snapshot: str) -> dict[str, Any] | None:
                 if len(vals) >= 2:
                     outline_points.append((float(vals[0]), float(vals[1])))
 
-        layer = layers.first_value.strip('"')
-        priority = int(priority_node.first_value) if priority_node else 0
+        layer_val = layers.first_value
+        layer = (layer_val or "").strip('"')
+        priority_val = priority_node.first_value if priority_node else None
+        priority = int(priority_val) if priority_val else 0
 
         return {
-            "net": int(net.first_value),
+            "net": int(net.first_value or 0),
             "layer": layer,
             "outline_points": outline_points,
             "priority": priority,

@@ -2,9 +2,12 @@
 
 ## Current State
 - 90 tools, 577 tests, 100% pass, 14 categories
-- Full feature parity with old Node.js server (which had 78% pass rate)
+- Full featureparity with old Node.js server (which had 78% pass rate)
 - Best-in-class among 6 competing KiCad MCP repos
 - CI pipeline (GitHub Actions), integration tests, performance benchmarks
+- IPC API integration complete (KiCad 9+ only)
+- Schematic-PCB sync complete (forward/back annotation)
+- JLCPCB parts integration complete (catalog search, BOM export)
 
 ---
 
@@ -17,9 +20,9 @@
 - [x] Bi-directional selection sync (click in KiCad -> MCP knows, MCP selects -> KiCad highlights)
 
 ### Schematic-PCB Sync
-- [ ] Forward annotation: push schematic changes to PCB
-- [ ] Back annotation: push PCB reference changes to schematic
-- [ ] Cross-reference validation (schematic vs PCB mismatch detection)
+- [x] Forward annotation: push schematic changes to PCB
+- [x] Back annotation: push PCB reference changes to schematic
+- [x] Cross-reference validation (schematic vs PCB mismatch detection)
 
 ### JLCPCB Parts Integration
 - [x] Live JLCPCB parts catalog search (basic/extended stock)
@@ -41,9 +44,9 @@
 - [x] Force-directed component placement with SA cooling
 - [x] Placement evaluation (HPWL metric, overlap detection)
 - [ ] Constraint-aware placement (keep-out zones, thermal grouping)
+- [ ] Component placement suggestions (group by function, minimize trace length)
 
 ### Design Assistance
-- [ ] Component placement suggestions (group by function, minimize trace length)
 - [ ] Power delivery network analysis (voltage drop, current density)
 - [ ] Thermal analysis (identify hot spots from copper area + power dissipation)
 - [ ] Impedance calculator (microstrip/stripline for controlled impedance traces)
@@ -88,9 +91,13 @@
 ## Tech Debt / Quality
 
 - [x] Update CLAUDE.md competitive table — all patterns now implemented, remove "Planned" status
-- [ ] Add type stubs for `pcbnew` module (for IDE support when available)
 - [x] Integration tests for new session manager methods (12 tests covering full commit/rollback workflows)
 - [x] Performance benchmarks for large boards (24 tests, up to 500 components)
 - [x] CI pipeline (GitHub Actions: pytest + ruff + mypy on Python 3.11-3.13, Ubuntu + Windows)
 - [x] Pagination (limit/offset) for listing tools to prevent context window overflow
 - [x] Global response truncation safety net in execute_tool (50KB cap)
+
+### Recent Tech Debt (from production hardening)
+- [ ] Fix kicad-cli `--format plain` validation issue - use `json` format instead
+- [ ] Add integration test for real KiCad IPC API (requires KiCad installation)
+- [ ] Improve documentation for optional dependencies (kipy, pcbnew)

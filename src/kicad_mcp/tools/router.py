@@ -12,8 +12,11 @@ The LLM discovers and invokes specialized tools on-demand, reducing context by ~
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import time
+from collections import defaultdict
 from typing import Any
 
 from fastmcp import FastMCP
@@ -21,6 +24,13 @@ from fastmcp import FastMCP
 from .registry import TOOL_REGISTRY, get_categories
 
 MAX_RESPONSE_CHARS = 50_000  # ~12k tokens
+
+# Global rate limiter with per-tool and per-session limits
+_rate_limit_buckets: dict[str, float] = defaultdict(lambda: 0.0)
+_rate_lock = asyncio.Lock()
+_RATE_LIMIT_WINDOW = 60.0  # 60 second rolling window
+_MAX_REQUESTS_PER_WINDOW = 100  # Max requests in rolling window
+_MAX_CONCURRENT_REQUESTS = 5  # Max concurrent tool executions
 
 
 def _truncate_response(result: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +81,38 @@ def _truncate_response(result: dict[str, Any]) -> dict[str, Any]:
         "Use limit/offset parameters or search_* tools for narrower results."
     )
     return result
+
+
+async def _check_rate_limit(tool_name: str) -> bool:
+    """Check if the tool execution is allowed under rate limits."""
+    async with _rate_lock:
+        current_time = time.time()
+        window_start = current_time - _RATE_LIMIT_WINDOW
+
+        # Clean old entries - keep only recent timestamps
+        recent_timestamps = [t for t in _rate_limit_buckets.values() if t > window_start]
+
+        # Check if adding this request would exceed the limit
+        if len(recent_timestamps) >= _MAX_REQUESTS_PER_WINDOW:
+            return False
+
+        # Add this request timestamp
+        _rate_limit_buckets[tool_name] = current_time
+        return True
+
+
+def _get_retry_after(tool_name: str) -> float:
+    """Get seconds until rate limit resets."""
+    current_time = time.time()
+    window_start = current_time - _RATE_LIMIT_WINDOW
+
+    if tool_name in _rate_limit_buckets:
+        bucket_time = _rate_limit_buckets[tool_name]
+        if bucket_time <= window_start:
+            return 0.0
+        return bucket_time + _RATE_LIMIT_WINDOW - current_time
+
+    return 0.0
 
 
 def register_router_tools(mcp: FastMCP) -> None:
@@ -150,6 +192,13 @@ def register_router_tools(mcp: FastMCP) -> None:
 
         spec = TOOL_REGISTRY[tool_name]
         args = arguments or {}
+
+        # Rate limiting check
+        if not await _check_rate_limit(tool_name):
+            return {
+                "error": "Rate limit exceeded. Please wait before making more requests.",
+                "retry_after": _get_retry_after(tool_name),
+            }
 
         try:
             result = spec.handler(**args)

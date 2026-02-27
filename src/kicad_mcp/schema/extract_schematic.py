@@ -78,7 +78,7 @@ def extract_symbols(doc: Document) -> list[SchSymbol]:
             pin_num = pin_node.first_value or ""
             pin_uuid_node = pin_node.get("uuid")
             pin_uuid = pin_uuid_node.first_value if pin_uuid_node else ""
-            pins.append(SchPin(number=pin_num, uuid=pin_uuid))
+            pins.append(SchPin(number=pin_num, uuid=pin_uuid or ""))
 
         symbols.append(
             SchSymbol(
@@ -118,7 +118,7 @@ def extract_wires(doc: Document) -> list[Wire]:
             )
             uuid_node = wire_node.get("uuid")
             wire_uuid = uuid_node.first_value if uuid_node else ""
-            wires.append(Wire(start=start, end=end, uuid=wire_uuid))
+            wires.append(Wire(start=start, end=end, uuid=wire_uuid or ""))
     return wires
 
 
@@ -130,14 +130,14 @@ def extract_labels(doc: Document) -> list[Label]:
         position = _extract_position(label_node.get("at"))
         uuid_node = label_node.get("uuid")
         label_uuid = uuid_node.first_value if uuid_node else ""
-        labels.append(Label(name=name, position=position, uuid=label_uuid))
+        labels.append(Label(name=name, position=position, uuid=label_uuid or ""))
     # Also check global_label
     for gl_node in doc.root.find_all("global_label"):
         name = gl_node.first_value or ""
         position = _extract_position(gl_node.get("at"))
         uuid_node = gl_node.get("uuid")
         gl_uuid = uuid_node.first_value if uuid_node else ""
-        labels.append(Label(name=name, position=position, uuid=gl_uuid))
+        labels.append(Label(name=name, position=position, uuid=gl_uuid or ""))
     return labels
 
 
@@ -149,7 +149,7 @@ def extract_power_ports(doc: Document) -> list[PowerPort]:
         position = _extract_position(pp_node.get("at"))
         uuid_node = pp_node.get("uuid")
         pp_uuid = uuid_node.first_value if uuid_node else ""
-        ports.append(PowerPort(name=name, position=position, uuid=pp_uuid))
+        ports.append(PowerPort(name=name, position=position, uuid=pp_uuid or ""))
     return ports
 
 

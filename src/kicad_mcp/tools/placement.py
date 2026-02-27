@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..session import SessionManager
+from ..validation import (
+    validate_coordinate_pair,
+    validate_layer_name,
+    validate_reference,
+)
 from .registry import register_tool
 
 
-def _get_mgr():
+def _get_mgr() -> SessionManager:
     """Get the mutation module's session manager (shared singleton)."""
     from .mutation import _get_manager
 
@@ -37,6 +43,19 @@ def _place_component_handler(
         y: Y position in mm.
         layer: Target layer ("F.Cu" or "B.Cu"). Defaults to "F.Cu".
     """
+    # Validate inputs
+    ref_result = validate_reference(reference)
+    if not ref_result.valid:
+        return {"error": f"Invalid reference: {ref_result.error}"}
+
+    coord_result = validate_coordinate_pair(x, y, ("x", "y"))
+    if not coord_result.valid:
+        return {"error": f"Invalid coordinates: {coord_result.error}"}
+
+    layer_result = validate_layer_name(layer)
+    if not layer_result.valid:
+        return {"error": f"Invalid layer: {layer_result.error}"}
+
     mgr = _get_mgr()
     try:
         session = mgr.get_session(session_id)

@@ -364,7 +364,7 @@ def apply_replace_component(
 
         layer_nd = new_fp.get("layer")
         if layer_nd and layer_nd.children:
-            layer_nd.children[0] = _make_quoted(layer)
+            layer_nd.children[0] = _make_quoted(str(layer or "F.Cu"))
 
         for prop in new_fp.find_all("property"):
             if prop.first_value == "Reference":
@@ -389,7 +389,9 @@ def apply_replace_component(
         if uuid_node and uuid_node.children:
             uuid_node.children[0] = _make_quoted(new_uuid)
     else:
-        new_fp = _build_footprint_node(new_library, reference, new_value, x, y, layer)
+        new_fp = _build_footprint_node(
+            new_library, reference, new_value, x, y, str(layer or "F.Cu")
+        )
 
     session._working_doc.root.children.append(new_fp)
 

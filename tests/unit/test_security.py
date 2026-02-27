@@ -26,6 +26,13 @@ class TestPathValidator:
         with pytest.raises(SecurityError, match="traversal"):
             validator.validate_input("../../etc/passwd")
 
+    def test_validate_traversal_with_trusted_root(self, tmp_path: Path) -> None:
+        """Test that traversal is rejected even with trusted root configured."""
+        validator = PathValidator(trusted_roots=[tmp_path])
+        # Path traversal in the raw string is caught before trusted root check
+        with pytest.raises(SecurityError, match="traversal"):
+            validator.validate_input(str(tmp_path / ".." / ".." / "etc" / "passwd"))
+
     def test_validate_null_bytes(self, validator: PathValidator) -> None:
         with pytest.raises(SecurityError, match="null bytes"):
             validator.validate_input("board\x00.kicad_pcb")
@@ -114,3 +121,78 @@ class TestSecureSubprocess:
     def test_reject_empty_command(self, secure: SecureSubprocess) -> None:
         with pytest.raises(SecurityError, match="Empty command"):
             secure.validate_command([])
+
+    def test_allow_kicad_cli_with_full_path(self, secure: SecureSubprocess) -> None:
+        """Test that kicad-cli with full path is accepted."""
+        secure.validate_command(
+            [
+                "/usr/bin/kicad-cli",
+                "pcb",
+                "drc",
+                "board.kicad_pcb",
+            ]
+        )
+
+    def test_reject_path_traversal_in_argument(self, secure: SecureSubprocess) -> None:
+        """Test that path traversal in file path arguments is rejected."""
+        with pytest.raises(SecurityError, match="traversal"):
+            secure.validate_command(["kicad-cli", "pcb", "drc", "../../etc/passwd.kicad_pcb"])
+
+    def test_reject_null_byte_in_path(self, secure: SecureSubprocess) -> None:
+        """Test that null bytes in paths are rejected."""
+        with pytest.raises(SecurityError, match="null bytes"):
+            secure.validate_command(["kicad-cli", "pcb", "drc", "board\x00.kicad_pcb"])
+
+    def test_reject_absolute_path(self, secure: SecureSubprocess) -> None:
+        """Test that absolute paths are rejected."""
+        with pytest.raises(SecurityError, match="Absolute paths not allowed"):
+            secure.validate_command(["kicad-cli", "pcb", "drc", "/etc/passwd.kicad_pcb"])
+
+    def test_reject_invalid_flag_value(self, secure: SecureSubprocess) -> None:
+        """Test that invalid flag values are rejected."""
+        with pytest.raises(SecurityError, match="Invalid value"):
+            secure.validate_command(
+                ["kicad-cli", "pcb", "export", "gerbers", "--format", "exe", "board.kicad_pcb"]
+            )
+
+    def test_accept_valid_command(self, secure: SecureSubprocess) -> None:
+        """Test that valid commands are accepted."""
+        # Should not raise
+        secure.validate_command(
+            [
+                "kicad-cli",
+                "pcb",
+                "drc",
+                "--format",
+                "json",
+                "--output",
+                "report.json",
+                "board.kicad_pcb",
+            ]
+        )
+
+    def test_accept_valid_command_with_relative_path(self, secure: SecureSubprocess) -> None:
+        """Test that relative paths are accepted."""
+        # Should not raise
+        secure.validate_command(["kicad-cli", "pcb", "drc", "subdir/board.kicad_pcb"])
+
+    def test_accept_valid_subcommand_path(self, secure: SecureSubprocess) -> None:
+        """Test that valid kicad file paths are accepted."""
+        secure.validate_command(
+            ["kicad-cli", "pcb", "export", "gerbers", "--output", "output/", "board.kicad_pcb"]
+        )
+
+    def test_reject_command_injection_via_flag(self, secure: SecureSubprocess) -> None:
+        """Test that command injection via flags is rejected."""
+        with pytest.raises(SecurityError):
+            # Malicious path with shell metacharacters
+            secure.validate_command(
+                [
+                    "kicad-cli",
+                    "pcb",
+                    "drc",
+                    "--output",
+                    "/tmp/malware.sh && rm -rf /",
+                    "board.kicad_pcb",
+                ]
+            )

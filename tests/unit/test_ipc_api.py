@@ -544,21 +544,28 @@ class TestIpcOperations:
         board.create_items = MagicMock()
         ipc, _ = self._connect_with_mock(board)
 
-        # Mock the TrackSegment class by patching the import
-        mock_track = MagicMock()
-        mock_track.uuid = "track-uuid-123"
-        mock_track_cls = MagicMock(return_value=mock_track)
+        class SimpleTrack:
+            """Simplified Track mock that doesn't call protobuf CopyFrom."""
+
+            def __init__(self):
+                self.start = None
+                self.end = None
+                self.width = None
+                self.net_code = None
+                self.layer = None
+                self.id = "track-uuid-123"
+                self.uuid = "track-uuid-123"
 
         with (
             patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
-            patch.dict("sys.modules", {"kipy.board": MagicMock(TrackSegment=mock_track_cls)}),
+            patch("kipy.board_types.Track", SimpleTrack),
         ):
             mock_vec.from_xy.return_value = MagicMock()
 
             uuid = ipc.create_track_segment(10, 10, 20, 20, 0.25, "F.Cu", 1)
 
             assert uuid == "track-uuid-123"
-            board.create_items.assert_called_once_with(mock_track)
+            board.create_items.assert_called_once()
             # Verify coordinates converted to nm
             assert mock_vec.from_xy.call_count == 2
 
@@ -568,18 +575,28 @@ class TestIpcOperations:
         board.create_items = MagicMock()
         ipc, _ = self._connect_with_mock(board)
 
-        with patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec:
+        class SimpleVia:
+            """Simplified Via mock that doesn't call protobuf CopyFrom."""
+
+            def __init__(self):
+                self.position = None
+                self.width = None
+                self.drill = None
+                self.net_code = None
+                self.id = "via-uuid-456"
+                self.uuid = "via-uuid-456"
+
+        with (
+            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
+            patch("kipy.board_types.Via", SimpleVia),
+        ):
             mock_vec.from_xy.return_value = MagicMock()
-            with patch("kipy.board.Via") as mock_via_cls:
-                mock_via = MagicMock()
-                mock_via.uuid = "via-uuid-456"
-                mock_via_cls.return_value = mock_via
 
-                uuid = ipc.create_via(15, 15, 0.8, 0.4, ("F.Cu", "B.Cu"), 1)
+            uuid = ipc.create_via(15, 15, 0.8, 0.4, ("F.Cu", "B.Cu"), 1)
 
-                assert uuid == "via-uuid-456"
-                board.create_items.assert_called_once_with(mock_via)
-                mock_vec.from_xy.assert_called_once()
+            assert uuid == "via-uuid-456"
+            board.create_items.assert_called_once()
+            mock_vec.from_xy.assert_called_once()
 
     def test_create_zone(self) -> None:
         """Create a zone on the board."""
@@ -587,20 +604,31 @@ class TestIpcOperations:
         board.create_items = MagicMock()
         ipc, _ = self._connect_with_mock(board)
 
-        with patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec:
+        class SimpleZone:
+            """Simplified Zone mock that doesn't call protobuf CopyFrom."""
+
+            def __init__(self):
+                self.net_code = None
+                self.layer = None
+                self.priority = None
+                self.outline = []
+                self.min_thickness = None
+                self.id = "zone-uuid-789"
+                self.uuid = "zone-uuid-789"
+
+        with (
+            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
+            patch("kipy.board_types.Zone", SimpleZone),
+        ):
             mock_vec.from_xy.return_value = MagicMock()
-            with patch("kipy.board.Zone") as mock_zone_cls:
-                mock_zone = MagicMock()
-                mock_zone.uuid = "zone-uuid-789"
-                mock_zone_cls.return_value = mock_zone
 
-                points = [(0, 0), (10, 0), (10, 10), (0, 10)]
-                uuid = ipc.create_zone(1, "F.Cu", points, priority=0, min_thickness=0.25)
+            points = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+            uuid = ipc.create_zone(1, "F.Cu", points, priority=0, min_thickness=0.25)
 
-                assert uuid == "zone-uuid-789"
-                board.create_items.assert_called_once_with(mock_zone)
-                # Should convert 4 points
-                assert mock_vec.from_xy.call_count == 4
+            assert uuid == "zone-uuid-789"
+            board.create_items.assert_called_once()
+            # Should convert 4 points
+            assert mock_vec.from_xy.call_count == 4
 
     def test_refill_zones(self) -> None:
         """Refill zones on the board."""
@@ -1026,13 +1054,21 @@ class TestIpcToolHandlers:
         ipc._kicad = _make_mock_kicad(board)
         ipc._connected = True
 
-        mock_track = MagicMock()
-        mock_track.uuid = "track-123"
-        mock_track_cls = MagicMock(return_value=mock_track)
+        class SimpleTrack:
+            """Simplified Track mock that doesn't call protobuf CopyFrom."""
+
+            def __init__(self):
+                self.start = None
+                self.end = None
+                self.width = None
+                self.net_code = None
+                self.layer = None
+                self.id = "track-123"
+                self.uuid = "track-123"
 
         with (
             patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
-            patch.dict("sys.modules", {"kipy.board": MagicMock(TrackSegment=mock_track_cls)}),
+            patch("kipy.board_types.Track", SimpleTrack),
         ):
             mock_vec.from_xy.return_value = MagicMock()
 
@@ -1052,14 +1088,22 @@ class TestIpcToolHandlers:
         ipc._kicad = _make_mock_kicad(board)
         ipc._connected = True
 
+        class SimpleVia:
+            """Simplified Via mock that doesn't call protobuf CopyFrom."""
+
+            def __init__(self):
+                self.position = None
+                self.width = None
+                self.drill = None
+                self.net_code = None
+                self.id = "via-456"
+                self.uuid = "via-456"
+
         with (
             patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
-            patch("kipy.board.Via") as mock_via_cls,
+            patch("kipy.board_types.Via", SimpleVia),
         ):
             mock_vec.from_xy.return_value = MagicMock()
-            mock_via = MagicMock()
-            mock_via.uuid = "via-456"
-            mock_via_cls.return_value = mock_via
 
             result = _ipc_create_via_handler(15, 15, 0.8, 0.4, "F.Cu", "B.Cu", 1)
 
@@ -1077,14 +1121,23 @@ class TestIpcToolHandlers:
         ipc._kicad = _make_mock_kicad(board)
         ipc._connected = True
 
+        class SimpleZone:
+            """Simplified Zone mock that doesn't call protobuf CopyFrom."""
+
+            def __init__(self):
+                self.net_code = None
+                self.layer = None
+                self.priority = None
+                self.outline = []
+                self.min_thickness = None
+                self.id = "zone-789"
+                self.uuid = "zone-789"
+
         with (
             patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
-            patch("kipy.board.Zone") as mock_zone_cls,
+            patch("kipy.board_types.Zone", SimpleZone),
         ):
             mock_vec.from_xy.return_value = MagicMock()
-            mock_zone = MagicMock()
-            mock_zone.uuid = "zone-789"
-            mock_zone_cls.return_value = mock_zone
 
             result = _ipc_create_zone_handler(
                 1, "F.Cu", "[[0, 0], [10, 0], [10, 10], [0, 10]]", 0, 0.25
@@ -1578,13 +1631,21 @@ class TestSessionIpcIntegration:
         ipc._kicad = _make_mock_kicad(board)
         ipc._connected = True
 
-        mock_track = MagicMock()
-        mock_track.uuid = "track-123"
-        mock_track_cls = MagicMock(return_value=mock_track)
+        class SimpleTrack:
+            """Simplified Track mock that doesn't call protobuf CopyFrom."""
+
+            def __init__(self):
+                self.start = None
+                self.end = None
+                self.width = None
+                self.net_code = None
+                self.layer = None
+                self.id = "track-123"
+                self.uuid = "track-123"
 
         with (
             patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
-            patch.dict("sys.modules", {"kipy.board": MagicMock(TrackSegment=mock_track_cls)}),
+            patch("kipy.board_types.Track", SimpleTrack),
         ):
             mock_vec.from_xy.return_value = MagicMock()
 

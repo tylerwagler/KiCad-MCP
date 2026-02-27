@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..session.board_setup_ops import _VALID_SETUP_RULES
+from ..session.manager import SessionManager
+from .mutation import _get_manager
 from .registry import register_tool
 
 
-def _get_mgr():
-    from .mutation import _get_manager
-
+def _get_mgr() -> SessionManager:
     return _get_manager()
 
 
@@ -24,17 +25,16 @@ def _get_design_rules_handler() -> dict[str, Any]:
     pad_to_paste_clearance_ratio.
     """
     from .. import state
-    from ..session.manager import SessionManager
 
     doc = state.get_document()
     setup_node = doc.root.get("setup")
     if setup_node is None:
         return {"error": "Board has no setup section"}
 
-    valid_keys = SessionManager._VALID_SETUP_RULES
     rules: dict[str, Any] = {}
     for child in setup_node.children:
-        if child.name in valid_keys and child.atom_values:
+        if child.name in _VALID_SETUP_RULES and child.atom_values:
+            # child.name is str (list nodes always have a name), child.atom_values is list[str]
             rules[child.name] = child.atom_values[0]
     return {"rules": rules}
 

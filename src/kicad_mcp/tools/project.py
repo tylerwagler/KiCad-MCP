@@ -11,7 +11,7 @@ from .registry import register_tool
 
 # ── Templates ──────────────────────────────────────────────────────
 
-_KICAD_PRO_TEMPLATE = {
+_KICAD_PRO_TEMPLATE: dict[str, Any] = {
     "board": {"design_settings": {"defaults": {"board_outline_line_width": 0.05}}},
     "boards": [],
     "cvpcb": {"equivalence_files": []},

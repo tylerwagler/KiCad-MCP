@@ -153,18 +153,21 @@ class KiCadCli:
 
         # Create temp output file if none specified
         _created_temp = output_path is None
+        temp_path: str | None = None
         if _created_temp:
-            fd, output_path = tempfile.mkstemp(suffix=".json", prefix="drc_")
+            fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="drc_")
             os.close(fd)
+            output_path = temp_path if temp_path else ""
 
         try:
+            # output_path should be str by now (either passed or created)
             args = [
                 "pcb",
                 "drc",
                 "--format",
                 "json",
                 "--output",
-                output_path,
+                str(output_path),
                 "--severity-all",
                 "--units",
                 "mm",
@@ -175,7 +178,7 @@ class KiCadCli:
 
             # Parse JSON report
             try:
-                report = json.loads(Path(output_path).read_text(encoding="utf-8"))
+                report = json.loads(Path(str(output_path)).read_text(encoding="utf-8"))
             except (json.JSONDecodeError, FileNotFoundError):
                 # JSON not produced — kicad-cli likely failed to run DRC
                 message = self._format_error(result, "kicad-cli produced no DRC report")
@@ -189,12 +192,14 @@ class KiCadCli:
 
             return self._parse_drc_report(report, output_path, result.stderr.strip())
         finally:
-            if _created_temp:
+            if _created_temp and temp_path:
                 with contextlib.suppress(OSError):
-                    os.unlink(output_path)
+                    os.unlink(temp_path)
 
     @staticmethod
-    def _parse_drc_report(report: dict[str, Any], report_path: str, stderr: str = "") -> DrcResult:
+    def _parse_drc_report(
+        report: dict[str, Any], report_path: str | None, stderr: str = ""
+    ) -> DrcResult:
         """Parse a kicad-cli DRC JSON report into a DrcResult."""
         violations: list[DrcViolation] = []
         error_count = 0

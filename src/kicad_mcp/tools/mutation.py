@@ -5,21 +5,22 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+# Module-level session manager instance (thread-safe lazy init)
+from ..session import SessionManager  # noqa: E402 (import not at top)
 from .registry import register_tool
 
-# Module-level session manager instance (thread-safe lazy init)
-_session_manager = None
+_session_manager: SessionManager | None = None
 _mgr_lock = threading.Lock()
 
 
-def _get_manager():
+def _get_manager() -> SessionManager:
+    """Get or create the session manager singleton."""
     global _session_manager
     if _session_manager is None:
         with _mgr_lock:
             if _session_manager is None:
-                from ..session import SessionManager
-
                 _session_manager = SessionManager()
+    assert _session_manager is not None
     return _session_manager
 
 

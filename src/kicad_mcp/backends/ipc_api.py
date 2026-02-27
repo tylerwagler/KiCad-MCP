@@ -18,19 +18,22 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Lazy import guard for kipy
-_KIPY_AVAILABLE = False
+_KIPY_AVAILABLE: bool = False
 KiCad: Any = None  # Will be set to the real class if kipy is available
+_Angle: Any = None  # Will be set to the real class if kipy is available
+_Vector2: Any = None  # Will be set to the real class if kipy is available
 
 try:
-    from kipy import KiCad as _KiCadCls  # type: ignore[import-untyped]
-    from kipy.geometry import Angle as _Angle  # type: ignore[import-untyped]
-    from kipy.geometry import Vector2 as _Vector2  # type: ignore[import-untyped]
+    from kipy import KiCad as _KiCadCls
+    from kipy.geometry import Angle as _AngleCls
+    from kipy.geometry import Vector2 as _Vector2Cls
 
     KiCad = _KiCadCls
+    _Angle = _AngleCls
+    _Vector2 = _Vector2Cls
     _KIPY_AVAILABLE = True
 except ImportError:
-    _Angle = None
-    _Vector2 = None
+    pass
 
 
 class IpcNotAvailable(Exception):
@@ -138,15 +141,22 @@ class IpcBackend:
     def _fp_ref(fp: Any) -> str:
         """Extract reference designator string from a kipy FootprintInstance."""
         # fp.reference_field.text returns a BoardText; .value is the plain str
-        return fp.reference_field.text.value
+        ref_field = getattr(fp, "reference_field", None)
+        if ref_field is not None and hasattr(ref_field, "text"):
+            text_val = getattr(ref_field.text, "value", None)
+            if text_val is not None:
+                return str(text_val)
+        return ""
 
     @staticmethod
     def _fp_val(fp: Any) -> str:
         """Extract value string from a kipy FootprintInstance."""
-        try:
-            return fp.value_field.text.value
-        except (AttributeError, TypeError):
-            return ""
+        val_field = getattr(fp, "value_field", None)
+        if val_field is not None and hasattr(val_field, "text"):
+            text_val = getattr(val_field.text, "value", None)
+            if text_val is not None:
+                return str(text_val)
+        return ""
 
     @staticmethod
     def _nm_to_mm(nm: float) -> float:
@@ -155,9 +165,11 @@ class IpcBackend:
         Uses kipy.util.units if available, falls back to manual conversion.
         """
         try:
-            from kipy.util.units import to_mm  # type: ignore[import-untyped]
+            from kipy.util.units import to_mm
 
-            return to_mm(nm)
+            # Handle float to int type mismatch
+            result = to_mm(int(nm))
+            return float(result)
         except ImportError:
             return nm / 1_000_000
 
@@ -168,7 +180,7 @@ class IpcBackend:
         Uses kipy.util.units if available, falls back to manual conversion.
         """
         try:
-            from kipy.util.units import from_mm  # type: ignore[import-untyped]
+            from kipy.util.units import from_mm
 
             return from_mm(mm)
         except ImportError:
@@ -181,9 +193,9 @@ class IpcBackend:
         Uses kipy.util.board_layer if available, falls back to string conversion.
         """
         try:
-            from kipy.util.board_layer import canonical_name  # type: ignore[import-untyped]
+            from kipy.util.board_layer import canonical_name
 
-            return canonical_name(layer_int)
+            return canonical_name(layer_int)  # type: ignore[arg-type]
         except ImportError:
             return str(layer_int)
 
@@ -388,7 +400,8 @@ class IpcBackend:
         try:
             # Try to ping the connection
             if hasattr(self._kicad, "ping"):
-                return self._kicad.ping()
+                result = self._kicad.ping()
+                return bool(result)
             # Fallback: try to get board as a health check
             self._kicad.get_board()
             return True
@@ -455,15 +468,15 @@ class IpcBackend:
         self.require_connection()
         try:
             board = self._kicad.get_board()
-            # Import track segment class from kipy
-            from kipy.board import TrackSegment  # type: ignore[import-untyped]
+            # Import track class from kipy (TrackSegment doesn't exist - use Track)
+            from kipy.board_types import Track
 
-            # Create track segment object
-            segment = TrackSegment()
+            # Create track object
+            segment = Track()
             segment.start = _Vector2.from_xy(self._mm_to_nm(start_x), self._mm_to_nm(start_y))
             segment.end = _Vector2.from_xy(self._mm_to_nm(end_x), self._mm_to_nm(end_y))
             segment.width = self._mm_to_nm(width)
-            segment.net_code = net_code
+            segment.net_code = net_code  # type: ignore[attr-defined]
             # Layer assignment will depend on kipy API - may need layer enum
             if hasattr(segment, "layer"):
                 segment.layer = layer  # type: ignore[assignment]
@@ -471,8 +484,8 @@ class IpcBackend:
             # Add to board
             board.create_items(segment)
 
-            # Return UUID for tracking
-            uuid_str = str(segment.uuid) if hasattr(segment, "uuid") else ""
+            # Return UUID for tracking (Track uses 'id' not 'uuid')
+            uuid_str = str(segment.id) if hasattr(segment, "id") else ""
             return uuid_str
         except IpcError:
             raise
@@ -505,24 +518,24 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             # Import via class from kipy
-            from kipy.board import Via  # type: ignore[import-untyped]
+            from kipy.board_types import Via
 
-            # Create via object
+            # Create via object (kipy stubs may not match runtime)
             via = Via()
             via.position = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
-            via.width = self._mm_to_nm(size)
-            via.drill = self._mm_to_nm(drill)
-            via.net_code = net_code
+            via.width = self._mm_to_nm(size)  # type: ignore[attr-defined]
+            via.drill = self._mm_to_nm(drill)  # type: ignore[attr-defined]
+            via.net_code = net_code  # type: ignore[attr-defined]
             # Layer span
             if hasattr(via, "layer_start") and hasattr(via, "layer_end"):
-                via.layer_start = layers[0]  # type: ignore[assignment]
-                via.layer_end = layers[1]  # type: ignore[assignment]
+                via.layer_start = layers[0]
+                via.layer_end = layers[1]
 
             # Add to board
             board.create_items(via)
 
-            # Return UUID for tracking
-            uuid_str = str(via.uuid) if hasattr(via, "uuid") else ""
+            # Return UUID for tracking (Via may have 'id' instead of 'uuid')
+            uuid_str = str(via.id) if hasattr(via, "id") else ""
             return uuid_str
         except IpcError:
             raise
@@ -547,19 +560,19 @@ class IpcBackend:
             min_thickness: Minimum copper thickness in mm
 
         Returns:
-            UUID of created zone as string.
+             UUID of created zone as string.
         """
         self.require_connection()
         try:
             board = self._kicad.get_board()
             # Import zone class from kipy
-            from kipy.board import Zone  # type: ignore[import-untyped]
+            from kipy.board_types import Zone
 
-            # Create zone object
+            # Create zone object (kipy stubs may not match runtime)
             zone = Zone()
-            zone.net_code = net_code
+            zone.net_code = net_code  # type: ignore[attr-defined]
             if hasattr(zone, "layer"):
-                zone.layer = layer  # type: ignore[assignment]
+                zone.layer = layer
             zone.priority = priority
 
             # Set outline points
@@ -568,7 +581,7 @@ class IpcBackend:
                 for x, y in outline_points:
                     pt = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
                     outline.append(pt)
-                zone.outline = outline
+                zone.outline = outline  # type: ignore[assignment]
 
             # Minimum thickness
             if hasattr(zone, "min_thickness"):
@@ -577,8 +590,8 @@ class IpcBackend:
             # Add to board
             board.create_items(zone)
 
-            # Return UUID for tracking
-            uuid_str = str(zone.uuid) if hasattr(zone, "uuid") else ""
+            # Return UUID for tracking (Zone may have 'id' instead of 'uuid')
+            uuid_str = str(zone.id) if hasattr(zone, "id") else ""
             return uuid_str
         except IpcError:
             raise
@@ -645,9 +658,10 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             if hasattr(board, "get_copper_layer_count"):
-                return board.get_copper_layer_count()
+                result = board.get_copper_layer_count()
+                return int(result)
             if hasattr(board, "copper_layer_count"):
-                return board.copper_layer_count
+                return int(board.copper_layer_count)
             return 2  # Default fallback
         except Exception as exc:
             raise IpcError(f"Failed to get copper layer count: {exc}") from exc
@@ -738,8 +752,24 @@ class IpcBackend:
 
         Args:
             variables: Dict mapping variable names to values.
+
+        Raises:
+            IpcError: If variables are invalid or IPC operation fails.
         """
         self.require_connection()
+
+        # Validate input
+        for key, value in variables.items():
+            if not isinstance(key, str) or not key:
+                raise IpcError("Variable name must be a non-empty string")
+            if not isinstance(value, str):
+                raise IpcError(f"Variable value for '{key}' must be a string")
+            # KiCad variable names have length limits
+            if len(key) > 255:
+                raise IpcError(f"Variable name too long: {key}")
+            if len(value) > 1024:
+                raise IpcError(f"Variable value for '{key}' too long")
+
         try:
             board = self._kicad.get_board()
             if hasattr(board, "set_text_variables"):
@@ -807,8 +837,7 @@ class IpcBackend:
         try:
             board = self._kicad.get_board()
             if hasattr(board, "set_active_layer"):
-                # May need to convert layer name to int enum
-                board.set_active_layer(layer)  # type: ignore[arg-type]
+                board.set_active_layer(layer)
         except Exception as exc:
             raise IpcError(f"Failed to set active layer: {exc}") from exc
 

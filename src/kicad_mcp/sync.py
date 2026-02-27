@@ -145,7 +145,7 @@ def forward_annotate(
         if not sym.on_board:
             continue
 
-        fp_node = fp_nodes.get(sym.reference)
+        fp_node = fp_nodes.get(sym.reference)  # type: ignore[assignment]
         if fp_node is None:
             not_on_board.append(sym.reference)
             continue
@@ -203,7 +203,7 @@ def back_annotate(
                     break
 
     for fp in board_footprints:
-        sym_node = sym_nodes.get(fp.reference)
+        sym_node = sym_nodes.get(fp.reference)  # type: ignore[assignment]
         if sym_node is None:
             not_in_schematic.append(fp.reference)
             continue

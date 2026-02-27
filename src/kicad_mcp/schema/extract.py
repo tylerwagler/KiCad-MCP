@@ -245,15 +245,15 @@ def extract_board_summary(doc: Document) -> BoardSummary:
     title = ""
     if title_block:
         title_node = title_block.get("title")
-        title = title_node.first_value if title_node else ""
+        title = title_node.first_value if title_node and title_node.first_value else ""
 
     # Version
     version_node = doc.root.get("version")
-    version = version_node.first_value if version_node else ""
+    version = version_node.first_value if version_node and version_node.first_value else ""
 
     # Generator
     gen_node = doc.root.get("generator")
-    generator = gen_node.first_value if gen_node else ""
+    generator = gen_node.first_value if gen_node and gen_node.first_value else ""
 
     # Thickness
     general = doc.root.get("general")

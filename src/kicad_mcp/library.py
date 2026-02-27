@@ -127,7 +127,7 @@ def _parse_lib_table(path: Path, env: dict[str, Path]) -> list[LibraryEntry]:
         uri_raw = uri_node.first_value if uri_node else ""
         descr = descr_node.first_value if descr_node else ""
 
-        resolved = str(_resolve_uri(uri_raw, env))
+        resolved = str(_resolve_uri(uri_raw or "", env))
         entries.append(
             LibraryEntry(
                 name=name or "",

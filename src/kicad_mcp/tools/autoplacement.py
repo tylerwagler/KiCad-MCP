@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..session.manager import SessionManager
 from .registry import register_tool
 
 
-def _get_mgr():
+def _get_mgr() -> SessionManager:
     from .mutation import _get_manager
 
     return _get_manager()

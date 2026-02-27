@@ -13,12 +13,14 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
+# Import IpcBackend for type annotations
+# (lazy import in _get_ipc to avoid breaking when kipy is not installed)
+from ..backends.ipc_api import IpcBackend
 from .registry import register_tool
 
 
-def _get_ipc():
-    from ..backends.ipc_api import IpcBackend
-
+def _get_ipc() -> IpcBackend:
+    """Get the singleton IpcBackend instance."""
     return IpcBackend.get()
 
 
@@ -175,7 +177,7 @@ def _ipc_push_changes_handler(session_id: str) -> dict[str, Any]:
     return result
 
 
-def _push_single_change(ipc: Any, change: Any) -> None:
+def _push_single_change(ipc: IpcBackend, change: Any) -> None:
     """Push a single ChangeRecord to KiCad via IPC."""
     op = change.operation
     if op == "move_component":

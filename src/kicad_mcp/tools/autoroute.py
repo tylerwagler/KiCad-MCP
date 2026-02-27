@@ -5,10 +5,13 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from ..algorithms.types import RouteResult
+from ..schema.board import Footprint
+from ..session.manager import Session, SessionManager
 from .registry import register_tool
 
 
-def _get_mgr():
+def _get_mgr() -> SessionManager:
     from .mutation import _get_manager
 
     return _get_manager()
@@ -222,7 +225,7 @@ def _auto_route_net_handler(
 
 
 def _find_pad_position(
-    footprints: list, reference: str, pad_number: str | None
+    footprints: list[Footprint], reference: str, pad_number: str | None
 ) -> tuple[float, float] | None:
     """Find absolute position of a pad on a footprint."""
     import math as _math
@@ -252,7 +255,7 @@ def _find_pad_position(
     return None
 
 
-def _collect_net_pads(footprints: list, net_number: int) -> list[dict[str, Any]]:
+def _collect_net_pads(footprints: list[Footprint], net_number: int) -> list[dict[str, Any]]:
     """Collect all pads belonging to a net."""
     import math as _math
 
@@ -280,9 +283,16 @@ def _collect_net_pads(footprints: list, net_number: int) -> list[dict[str, Any]]
     return pads
 
 
-def _apply_route_result(mgr, session, result, trace_width, via_size, via_drill):
+def _apply_route_result(
+    mgr: SessionManager,
+    session: Session,
+    result: RouteResult,
+    trace_width: float,
+    via_size: float,
+    via_drill: float,
+) -> list[Any]:
     """Apply a RouteResult to the session."""
-    changes = []
+    changes: list[Any] = []
     waypoints = result.waypoints
     net_number = result.net_number
 

@@ -9,6 +9,7 @@ operations or rollback the entire session.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from typing import Any
 
@@ -45,6 +46,7 @@ class SessionManager:
 
     def __init__(self) -> None:
         self._sessions: dict[str, Session] = {}
+        self._lock = threading.Lock()
 
     def start_session(self, doc: Document) -> Session:
         """Start a new mutation session for the given document."""
@@ -55,14 +57,16 @@ class SessionManager:
             _original_doc=doc,
             _working_doc=deep_copy_doc(doc),
         )
-        self._sessions[session_id] = session
+        with self._lock:
+            self._sessions[session_id] = session
         return session
 
     def get_session(self, session_id: str) -> Session:
         """Get a session by ID."""
-        if session_id not in self._sessions:
-            raise KeyError(f"No session with ID {session_id!r}")
-        return self._sessions[session_id]
+        with self._lock:
+            if session_id not in self._sessions:
+                raise KeyError(f"No session with ID {session_id!r}")
+            return self._sessions[session_id]
 
     def _require_active(self, session: Session) -> None:
         require_active(session)
@@ -435,47 +439,55 @@ class SessionManager:
         assert session._working_doc is not None
         assert session._original_doc is not None
 
-        applied = [c for c in session.changes if c.applied]
-        if not applied:
-            session.state = SessionState.COMMITTED
-            return {"status": "committed", "changes_written": 0}
+        with self._lock:
+            applied = [c for c in session.changes if c.applied]
+            if not applied:
+                session.state = SessionState.COMMITTED
+                return {"status": "committed", "changes_written": 0}
 
         ipc_pushed = ipc_ops.try_ipc_push(applied)
 
         session._working_doc.save()
         session._original_doc.root = session._working_doc.root
 
-        session.state = SessionState.COMMITTED
-        result: dict[str, Any] = {
-            "status": "committed",
-            "changes_written": len(applied),
-            "board_path": session.board_path,
-        }
-        if ipc_pushed > 0:
-            result["ipc_pushed"] = ipc_pushed
+        with self._lock:
+            session.state = SessionState.COMMITTED
+            result: dict[str, Any] = {
+                "status": "committed",
+                "changes_written": len(applied),
+                "board_path": session.board_path,
+            }
+            ipc_pushed_val = ipc_pushed
+        if ipc_pushed_val > 0:
+            result["ipc_pushed"] = ipc_pushed_val
         return result
 
     def rollback(self, session: Session) -> dict[str, Any]:
         """Rollback all changes — discard the working copy."""
         self._require_active(session)
 
-        applied = [c for c in session.changes if c.applied]
+        with self._lock:
+            applied = [c for c in session.changes if c.applied]
+            changes_len = len(session.changes)
+
         ipc_reversed = ipc_ops.reverse_ipc_changes(applied)
 
         session._working_doc = None
-        session.state = SessionState.ROLLED_BACK
-        result: dict[str, Any] = {
-            "status": "rolled_back",
-            "discarded_changes": len(session.changes),
-        }
-        if ipc_reversed > 0:
-            result["ipc_reversed"] = ipc_reversed
+        with self._lock:
+            session.state = SessionState.ROLLED_BACK
+            result: dict[str, Any] = {
+                "status": "rolled_back",
+                "discarded_changes": changes_len,
+            }
+            ipc_rev = ipc_reversed
+        if ipc_rev > 0:
+            result["ipc_reversed"] = ipc_rev
         return result
 
     # ── Static helpers (kept for backward compat) ──────────────────
 
     @staticmethod
-    def _find_footprint(doc: Document, reference: str):  # type: ignore[return]
+    def _find_footprint(doc: Document, reference: str) -> Any:
         return find_footprint(doc, reference)
 
     @staticmethod
