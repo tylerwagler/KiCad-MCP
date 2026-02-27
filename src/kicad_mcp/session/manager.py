@@ -15,6 +15,7 @@ from typing import Any
 
 from ..sexp import Document
 from ..sexp.parser import parse as sexp_parse, parse_all as sexp_parse_all
+from ..exceptions import ResourceNotFoundError
 from . import board_setup_ops, ipc_ops, net_zone_ops, placement_ops, routing_ops
 from .helpers import deep_copy_doc, find_footprint, find_footprint_by_uuid
 from .types import ChangeRecord, Session, SessionState, require_active
@@ -81,7 +82,11 @@ class SessionManager:
     # ── Placement delegates ────────────────────────────────────────
 
     def query_move(self, session: Session, reference: str, x: float, y: float) -> dict[str, Any]:
-        return placement_ops.query_move(session, reference, x, y)
+        """Preview moving a component. Returns error dict if component not found."""
+        try:
+            return placement_ops.query_move(session, reference, x, y)
+        except ResourceNotFoundError as e:
+            return {"error": e.message}
 
     def apply_move(self, session: Session, reference: str, x: float, y: float) -> ChangeRecord:
         return placement_ops.apply_move(session, reference, x, y)

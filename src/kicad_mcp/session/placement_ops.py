@@ -8,6 +8,7 @@ from typing import Any
 from ..security import SecurityError
 from ..sexp import SExp
 from ..sexp.parser import _quote_if_needed, parse as sexp_parse
+from ..exceptions import ResourceNotFoundError
 from .helpers import find_footprint
 from .types import (
     _LAYER_FLIP,
@@ -27,7 +28,9 @@ def query_move(session: Session, reference: str, x: float, y: float) -> dict[str
 
     fp_node = find_footprint(session._working_doc, reference)
     if fp_node is None:
-        return {"error": f"Component {reference!r} not found"}
+        raise ResourceNotFoundError(
+            f"Component {reference!r} not found", resource_type="component", reference=reference
+        )
 
     at_node = fp_node.get("at")
     current_x = float(at_node.atom_values[0]) if at_node and len(at_node.atom_values) > 0 else 0
