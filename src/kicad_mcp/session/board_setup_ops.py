@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+from ..constants import BOARD_OUTLINE_STROKE_WIDTH
 from ..sexp.parser import parse as sexp_parse
 from .helpers import find_footprint
 from .types import (
@@ -76,7 +77,7 @@ def apply_set_board_size(session: Session, width: float, height: float) -> Chang
         line_uuid = str(uuid.uuid4())
         line_text = (
             f"(gr_line (start {x1} {y1}) (end {x2} {y2})"
-            f" (stroke (width 0.05) (type default))"
+            f" (stroke (width BOARD_OUTLINE_STROKE_WIDTH) (type default))"
             f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
         )
         line_node = sexp_parse(line_text)
@@ -122,7 +123,7 @@ def apply_add_board_outline(session: Session, points: list[tuple[float, float]])
         line_uuid = str(uuid.uuid4())
         line_text = (
             f"(gr_line (start {x1} {y1}) (end {x2} {y2})"
-            f" (stroke (width 0.05) (type default))"
+            f" (stroke (width BOARD_OUTLINE_STROKE_WIDTH) (type default))"
             f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
         )
         line_node = sexp_parse(line_text)

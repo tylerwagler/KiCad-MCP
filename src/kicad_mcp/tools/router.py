@@ -21,9 +21,8 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from ..constants import MAX_RESPONSE_CHARS
 from .registry import TOOL_REGISTRY, get_categories
-
-MAX_RESPONSE_CHARS = 50_000  # ~12k tokens
 
 # Global rate limiter with per-tool and per-session limits
 # Stores list of request timestamps per tool for sliding window rate limiting
