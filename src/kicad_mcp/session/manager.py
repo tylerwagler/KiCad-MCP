@@ -16,7 +16,7 @@ from typing import Any
 from ..sexp import Document
 from ..sexp.parser import parse as sexp_parse, parse_all as sexp_parse_all
 from . import board_setup_ops, ipc_ops, net_zone_ops, placement_ops, routing_ops
-from .helpers import deep_copy_doc, find_footprint
+from .helpers import deep_copy_doc, find_footprint, find_footprint_by_uuid
 from .types import ChangeRecord, Session, SessionState, require_active
 
 # Re-export public types
@@ -283,9 +283,15 @@ class SessionManager:
                     at_node.children = before_node.children[:]
 
         elif record.operation == "flip_component":
-            fp_node = find_footprint(session._working_doc, record.target)
+            # Find the current footprint and restore from before_snapshot
+            # Use UUID from before_node for reliable matching if available
+            before_node = sexp_parse(record.before_snapshot)
+            fp_uuid = before_node.get("uuid")
+            if fp_uuid and fp_uuid.first_value:
+                fp_node = find_footprint_by_uuid(session._working_doc, fp_uuid.first_value)
+            else:
+                fp_node = find_footprint(session._working_doc, record.target)
             if fp_node is not None:
-                before_node = sexp_parse(record.before_snapshot)
                 idx = session._working_doc.root.children.index(fp_node)
                 session._working_doc.root.children[idx] = before_node
 
@@ -386,18 +392,24 @@ class SessionManager:
                     session._working_doc.root.children.append(node)
 
         elif record.operation == "add_mounting_hole":
-            after_str = record.after_snapshot
+            # Use UUID to find and remove the mounting hole reliably
+            hole_uuid = record.target
             for i, child in enumerate(session._working_doc.root.children):
-                if child.name == "footprint" and child.to_string() == after_str:
-                    session._working_doc.root.children.pop(i)
-                    break
+                if child.name == "footprint":
+                    fp_uuid = child.get("uuid")
+                    if fp_uuid and fp_uuid.first_value == hole_uuid:
+                        session._working_doc.root.children.pop(i)
+                        break
 
         elif record.operation == "add_board_text":
-            after_str = record.after_snapshot
+            # Use UUID to find and remove the text element reliably
+            text_uuid = record.target
             for i, child in enumerate(session._working_doc.root.children):
-                if child.name == "gr_text" and child.to_string() == after_str:
-                    session._working_doc.root.children.pop(i)
-                    break
+                if child.name == "gr_text":
+                    txt_uuid = child.get("uuid")
+                    if txt_uuid and txt_uuid.first_value == text_uuid:
+                        session._working_doc.root.children.pop(i)
+                        break
 
         elif record.operation == "set_design_rules":
             setup_node = session._working_doc.root.get("setup")

@@ -176,7 +176,7 @@ def apply_add_mounting_hole(
         change_id=str(uuid.uuid4())[:8],
         operation="add_mounting_hole",
         description=f"Add mounting hole at ({x}, {y}) drill={drill}mm",
-        target=f"mounting_hole:{hole_uuid[:8]}",
+        target=hole_uuid,  # Use full UUID for reliable identification
         before_snapshot="",
         after_snapshot=fp_node.to_string(),
         applied=True,
@@ -215,7 +215,7 @@ def apply_add_board_text(
         change_id=str(uuid.uuid4())[:8],
         operation="add_board_text",
         description=f"Add text '{text}' at ({x}, {y}) on {layer}",
-        target=f"text:{text_uuid[:8]}",
+        target=text_uuid,  # Use full UUID for reliable identification
         before_snapshot="",
         after_snapshot=text_node.to_string(),
         applied=True,
