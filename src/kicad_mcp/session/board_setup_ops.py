@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+from ..constants import BOARD_OUTLINE_STROKE_WIDTH
 from ..sexp.parser import parse as sexp_parse
 from .helpers import find_footprint
 from .types import (
@@ -76,7 +77,7 @@ def apply_set_board_size(session: Session, width: float, height: float) -> Chang
         line_uuid = str(uuid.uuid4())
         line_text = (
             f"(gr_line (start {x1} {y1}) (end {x2} {y2})"
-            f" (stroke (width 0.05) (type default))"
+            f" (stroke (width BOARD_OUTLINE_STROKE_WIDTH) (type default))"
             f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
         )
         line_node = sexp_parse(line_text)
@@ -122,7 +123,7 @@ def apply_add_board_outline(session: Session, points: list[tuple[float, float]])
         line_uuid = str(uuid.uuid4())
         line_text = (
             f"(gr_line (start {x1} {y1}) (end {x2} {y2})"
-            f" (stroke (width 0.05) (type default))"
+            f" (stroke (width BOARD_OUTLINE_STROKE_WIDTH) (type default))"
             f' (layer "Edge.Cuts") (uuid "{line_uuid}"))'
         )
         line_node = sexp_parse(line_text)
@@ -176,7 +177,7 @@ def apply_add_mounting_hole(
         change_id=str(uuid.uuid4())[:8],
         operation="add_mounting_hole",
         description=f"Add mounting hole at ({x}, {y}) drill={drill}mm",
-        target=f"mounting_hole:{hole_uuid[:8]}",
+        target=hole_uuid,  # Use full UUID for reliable identification
         before_snapshot="",
         after_snapshot=fp_node.to_string(),
         applied=True,
@@ -215,7 +216,7 @@ def apply_add_board_text(
         change_id=str(uuid.uuid4())[:8],
         operation="add_board_text",
         description=f"Add text '{text}' at ({x}, {y}) on {layer}",
-        target=f"text:{text_uuid[:8]}",
+        target=text_uuid,  # Use full UUID for reliable identification
         before_snapshot="",
         after_snapshot=text_node.to_string(),
         applied=True,

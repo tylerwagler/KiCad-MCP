@@ -14,13 +14,18 @@ import uuid
 from typing import Any
 
 from ..sexp import Document
-from ..sexp.parser import parse as sexp_parse
+from ..sexp.parser import parse as sexp_parse, parse_all as sexp_parse_all
+from ..exceptions import ResourceNotFoundError
 from . import board_setup_ops, ipc_ops, net_zone_ops, placement_ops, routing_ops
-from .helpers import deep_copy_doc, find_footprint
+from .helpers import deep_copy_doc, find_footprint, find_footprint_by_uuid
 from .types import ChangeRecord, Session, SessionState, require_active
 
 # Re-export public types
 __all__ = ["ChangeRecord", "Session", "SessionManager", "SessionState"]
+
+
+# Re-export _VALID_SETUP_RULES from board_setup_ops for backward compatibility
+_VALID_SETUP_RULES = board_setup_ops._VALID_SETUP_RULES
 
 
 class SessionManager:
@@ -43,6 +48,9 @@ class SessionManager:
         # Commit writes to disk, rollback discards all changes
         mgr.commit(session)  # or mgr.rollback(session)
     """
+
+    # Valid setup rules (re-exported from board_setup_ops for convenience)
+    _VALID_SETUP_RULES = board_setup_ops._VALID_SETUP_RULES
 
     def __init__(self) -> None:
         self._sessions: dict[str, Session] = {}
@@ -74,7 +82,11 @@ class SessionManager:
     # ── Placement delegates ────────────────────────────────────────
 
     def query_move(self, session: Session, reference: str, x: float, y: float) -> dict[str, Any]:
-        return placement_ops.query_move(session, reference, x, y)
+        """Preview moving a component. Returns error dict if component not found."""
+        try:
+            return placement_ops.query_move(session, reference, x, y)
+        except ResourceNotFoundError as e:
+            return {"error": e.message}
 
     def apply_move(self, session: Session, reference: str, x: float, y: float) -> ChangeRecord:
         return placement_ops.apply_move(session, reference, x, y)
@@ -276,9 +288,15 @@ class SessionManager:
                     at_node.children = before_node.children[:]
 
         elif record.operation == "flip_component":
-            fp_node = find_footprint(session._working_doc, record.target)
+            # Find the current footprint and restore from before_snapshot
+            # Use UUID from before_node for reliable matching if available
+            before_node = sexp_parse(record.before_snapshot)
+            fp_uuid = before_node.get("uuid")
+            if fp_uuid and fp_uuid.first_value:
+                fp_node = find_footprint_by_uuid(session._working_doc, fp_uuid.first_value)
+            else:
+                fp_node = find_footprint(session._working_doc, record.target)
             if fp_node is not None:
-                before_node = sexp_parse(record.before_snapshot)
                 idx = session._working_doc.root.children.index(fp_node)
                 session._working_doc.root.children[idx] = before_node
 
@@ -357,35 +375,46 @@ class SessionManager:
             for node in to_remove:
                 session._working_doc.root.children.remove(node)
             if record.before_snapshot:
-                for line_str in record.before_snapshot.split("\n"):
-                    if line_str.strip():
-                        session._working_doc.root.children.append(sexp_parse(line_str))
+                # Parse all S-expressions from the snapshot (handles multi-line S-expressions)
+                restored_nodes = sexp_parse_all(record.before_snapshot)
+                for node in restored_nodes:
+                    session._working_doc.root.children.append(node)
 
         elif record.operation == "add_board_outline":
-            for line_str in record.after_snapshot.split("\n"):
-                if line_str.strip():
-                    for i, child in enumerate(session._working_doc.root.children):
-                        if child.name == "gr_line" and child.to_string() == line_str:
-                            session._working_doc.root.children.pop(i)
-                            break
+            # Remove all gr_line nodes on Edge.Cuts (reverses add operation)
+            to_remove = []
+            for child in session._working_doc.root.children:
+                if child.name == "gr_line":
+                    layer_node = child.get("layer")
+                    if layer_node and layer_node.first_value == "Edge.Cuts":
+                        to_remove.append(child)
+            for node in to_remove:
+                session._working_doc.root.children.remove(node)
             if record.before_snapshot:
-                for line_str in record.before_snapshot.split("\n"):
-                    if line_str.strip():
-                        session._working_doc.root.children.append(sexp_parse(line_str))
+                # Parse all S-expressions from the snapshot (handles multi-line S-expressions)
+                restored_nodes = sexp_parse_all(record.before_snapshot)
+                for node in restored_nodes:
+                    session._working_doc.root.children.append(node)
 
         elif record.operation == "add_mounting_hole":
-            after_str = record.after_snapshot
+            # Use UUID to find and remove the mounting hole reliably
+            hole_uuid = record.target
             for i, child in enumerate(session._working_doc.root.children):
-                if child.name == "footprint" and child.to_string() == after_str:
-                    session._working_doc.root.children.pop(i)
-                    break
+                if child.name == "footprint":
+                    fp_uuid = child.get("uuid")
+                    if fp_uuid and fp_uuid.first_value == hole_uuid:
+                        session._working_doc.root.children.pop(i)
+                        break
 
         elif record.operation == "add_board_text":
-            after_str = record.after_snapshot
+            # Use UUID to find and remove the text element reliably
+            text_uuid = record.target
             for i, child in enumerate(session._working_doc.root.children):
-                if child.name == "gr_text" and child.to_string() == after_str:
-                    session._working_doc.root.children.pop(i)
-                    break
+                if child.name == "gr_text":
+                    txt_uuid = child.get("uuid")
+                    if txt_uuid and txt_uuid.first_value == text_uuid:
+                        session._working_doc.root.children.pop(i)
+                        break
 
         elif record.operation == "set_design_rules":
             setup_node = session._working_doc.root.get("setup")

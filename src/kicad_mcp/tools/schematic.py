@@ -2,11 +2,65 @@
 
 from __future__ import annotations
 
+import re
 import uuid as _uuid
 from typing import Any
 
-from ..sexp.parser import parse as sexp_parse
+from ..sexp.parser import _quote_if_needed, parse as sexp_parse
 from .registry import register_tool
+
+
+def _validate_net_name(name: str) -> None:
+    """Validate a net name."""
+    if not name:
+        raise ValueError("Net name cannot be empty")
+    if len(name) > 255:
+        raise ValueError("Net name too long (max 255 chars)")
+    # KiCad net names can contain alphanumerics, _, -, /
+    if not re.match(r"^[a-zA-Z0-9_\-/]+$", name):
+        raise ValueError(f"Invalid net name: {name!r}")
+
+
+def _validate_layer_name(name: str) -> None:
+    """Validate a layer name."""
+    if not name:
+        raise ValueError("Layer name cannot be empty")
+    if len(name) > 64:
+        raise ValueError("Layer name too long (max 64 chars)")
+    # KiCad layer names use letters, dots, underscores
+    if not re.match(r"^[a-zA-Z0-9._-]+$", name):
+        raise ValueError(f"Invalid layer name: {name!r}")
+
+
+def _validate_reference(ref: str) -> None:
+    """Validate a reference designator."""
+    if not ref:
+        raise ValueError("Reference cannot be empty")
+    if len(ref) > 32:
+        raise ValueError("Reference too long (max 32 chars)")
+    # KiCad references contain alphanumerics, _, -, .
+    if not re.match(r"^[a-zA-Z0-9_.\-]+$", ref):
+        raise ValueError(f"Invalid reference: {ref!r}")
+
+
+def _validate_value(value: str) -> None:
+    """Validate a component value."""
+    if not value:
+        raise ValueError("Value cannot be empty")
+    if len(value) > 255:
+        raise ValueError("Value too long (max 255 chars)")
+
+
+def _validate_lib_id(lib_id: str) -> None:
+    """Validate a library symbol ID."""
+    if not lib_id:
+        raise ValueError("lib_id cannot be empty")
+    if len(lib_id) > 128:
+        raise ValueError("lib_id too long (max 128 chars)")
+    # KiCad library IDs use letters, numbers, _, -, :
+    if not re.match(r"^[a-zA-Z0-9_\-:]+$", lib_id):
+        raise ValueError(f"Invalid lib_id: {lib_id!r}")
+
 
 # ── Handlers ────────────────────────────────────────────────────────
 
@@ -94,6 +148,11 @@ def _add_symbol_handler(
 
     doc = schematic_state.get_document()
 
+    # Validate inputs to prevent S-expression injection
+    _validate_lib_id(lib_id)
+    _validate_reference(reference)
+    _validate_value(value)
+
     # Check for duplicate reference
     symbols = schematic_state.get_symbols()
     if any(s.reference == reference for s in symbols):
@@ -103,13 +162,18 @@ def _add_symbol_handler(
     pin1_uuid = str(_uuid.uuid4())
     pin2_uuid = str(_uuid.uuid4())
 
+    # quote_if_needed escapes special characters like quotes and backslashes
+    quoted_lib_id = _quote_if_needed(lib_id)
+    quoted_reference = _quote_if_needed(reference)
+    quoted_value = _quote_if_needed(value)
+
     sym_text = (
-        f'(symbol (lib_id "{lib_id}") (at {x} {y} {angle}) (unit {unit})'
+        f"(symbol (lib_id {quoted_lib_id}) (at {x} {y} {angle}) (unit {unit})"
         f" (in_bom yes) (on_board yes)"
         f' (uuid "{sym_uuid}")'
-        f' (property "Reference" "{reference}" (at {x} {y - 2.54} 0)'
+        f' (property "Reference" {quoted_reference} (at {x} {y - 2.54} 0)'
         f" (effects (font (size 1.27 1.27))))"
-        f' (property "Value" "{value}" (at {x} {y + 2.54} 0)'
+        f' (property "Value" {quoted_value} (at {x} {y + 2.54} 0)'
         f" (effects (font (size 1.27 1.27))))"
         f' (property "Footprint" "" (at {x} {y} 0)'
         f" (effects (font (size 1.27 1.27)) hide))"
@@ -401,6 +465,26 @@ def _create_schematic_handler(
     """
     from pathlib import Path as P
 
+    # Validate paper size - KiCad uses specific paper sizes
+    VALID_PAPERS = frozenset(
+        {
+            "A4",
+            "A3",
+            "A2",
+            "A1",
+            "A0",
+            "Letter",
+            "Legal",
+            "Tabloid",
+            "Ledger",
+        }
+    )
+    if paper not in VALID_PAPERS:
+        return {
+            "error": f"Invalid paper size: {paper!r}. "
+            f"Valid options: {', '.join(sorted(VALID_PAPERS))}"
+        }
+
     sch_uuid = str(_uuid.uuid4())
     sch_text = (
         f'(kicad_sch (version 20231120) (generator "kicad_mcp")'
@@ -446,10 +530,10 @@ def _generate_netlist_handler(
         lib_name = sym.lib_id.split(":")[0] if ":" in sym.lib_id else sym.lib_id
         part_name = sym.lib_id.split(":")[-1] if ":" in sym.lib_id else sym.lib_id
         components.append(
-            f'    (comp (ref "{sym.reference}")\n'
-            f'      (value "{sym.value}")\n'
-            f'      (libsource (lib "{lib_name}")'
-            f' (part "{part_name}")))'
+            f"    (comp (ref {_quote_if_needed(sym.reference)})\n"
+            f"      (value {_quote_if_needed(sym.value)})\n"
+            f"      (libsource (lib {_quote_if_needed(lib_name)})"
+            f" (part {_quote_if_needed(part_name)})))"
         )
 
     # Build nets from labels
@@ -461,7 +545,7 @@ def _generate_netlist_handler(
             name = child.first_value
             if name and name not in label_names:
                 label_names.add(name)
-                nets.append(f'    (net (code {net_num}) (name "{name}"))')
+                nets.append(f"    (net (code {net_num}) (name {_quote_if_needed(name)}))")
                 net_num += 1
 
     nl_text = (

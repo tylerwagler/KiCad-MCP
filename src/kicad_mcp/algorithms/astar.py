@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import heapq
 import math
+
+from ..constants import MAX_ITERATIONS_DEFAULT, DEFAULT_VIA_COST
 from typing import Any
 
 from .grid import ObstacleMap
@@ -62,9 +64,9 @@ def astar_search(
     grid: ObstacleMap,
     start: Node,
     goal: Node,
-    via_cost: float = 5.0,
+    via_cost: float = DEFAULT_VIA_COST,
     diagonal: bool = True,
-    max_iterations: int = 500_000,
+    max_iterations: int = MAX_ITERATIONS_DEFAULT,
 ) -> list[Node] | None:
     """Run A* on the obstacle grid, returning the path or None.
 
@@ -97,6 +99,7 @@ def astar_search(
 
     came_from: dict[Node, Node] = {}
     g_score: dict[Node, float] = {start: 0.0}
+    closed_set: set[Node] = set()
 
     iterations = 0
 
@@ -106,6 +109,11 @@ def astar_search(
             return None  # safety limit
 
         _, _, current = heapq.heappop(open_set)
+
+        # Skip if already processed (found a better path)
+        if current in closed_set:
+            continue
+        closed_set.add(current)
 
         if current == goal:
             # Reconstruct path
@@ -205,9 +213,9 @@ def astar_route(
     end_layer: str,
     net_name: str = "",
     net_number: int = 0,
-    via_cost: float = 5.0,
+    via_cost: float = DEFAULT_VIA_COST,
     diagonal: bool = True,
-    max_iterations: int = 500_000,
+    max_iterations: int = MAX_ITERATIONS_DEFAULT,
 ) -> RouteResult:
     """Route between two points using A* pathfinding.
 

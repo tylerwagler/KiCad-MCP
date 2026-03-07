@@ -167,8 +167,13 @@ class IpcBackend:
         try:
             from kipy.util.units import to_mm
 
-            # Handle float to int type mismatch
-            result = to_mm(int(nm))
+            # Handle type mismatch: kipy.to_mm expects int but nm may be float
+            # Preserve precision by checking type first
+            if isinstance(nm, float):
+                # Convert float nanometers to mm directly
+                result = nm / 1_000_000
+            else:
+                result = to_mm(int(nm))
             return float(result)
         except ImportError:
             return nm / 1_000_000

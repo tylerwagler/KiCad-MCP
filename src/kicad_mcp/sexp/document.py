@@ -43,12 +43,28 @@ class Document:
         Raises:
             FileNotFoundError: If the file does not exist.
             ValueError: If the file cannot be parsed.
+            IOError: If the file cannot be read.
+            PermissionError: If the file cannot be read due to permissions.
         """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
-        raw_text = path.read_text(encoding="utf-8")
-        root = parse(raw_text)
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except PermissionError as e:
+            raise IOError(f"Permission denied reading {path}: {e}") from e
+        except UnicodeDecodeError as e:
+            raise ValueError(f"Invalid encoding in {path}: {e}") from e
+        except OSError as e:
+            raise IOError(f"Error reading {path}: {e}") from e
+
+        try:
+            root = parse(raw_text)
+        except ValueError as e:
+            raise ValueError(f"Failed to parse {path}: {e}") from e
+        except Exception as e:
+            raise ValueError(f"Unexpected error parsing {path}: {e}") from e
+
         return cls(path=path, root=root, raw_text=raw_text)
 
     def save(self, path: str | Path | None = None) -> Path:
@@ -59,10 +75,25 @@ class Document:
 
         Returns:
             The path the file was written to.
+
+        Raises:
+            IOError: If the file cannot be written.
+            PermissionError: If the file cannot be written due to permissions.
+            ValueError: If the content cannot be serialized.
         """
         target = Path(path) if path is not None else self.path
-        text = self.root.to_string() + "\n"
-        target.write_text(text, encoding="utf-8")
+        try:
+            text = self.root.to_string() + "\n"
+        except Exception as e:
+            raise ValueError(f"Failed to serialize document: {e}") from e
+
+        try:
+            target.write_text(text, encoding="utf-8")
+        except PermissionError as e:
+            raise IOError(f"Permission denied writing to {target}: {e}") from e
+        except OSError as e:
+            raise IOError(f"Error writing to {target}: {e}") from e
+
         return target
 
     @property
