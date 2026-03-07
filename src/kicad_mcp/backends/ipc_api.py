@@ -464,8 +464,41 @@ class IpcBackend:
 
         Returns:
             UUID of created segment as string.
+
+        Raises:
+            IpcError: If parameters are invalid.
         """
         self.require_connection()
+
+        # Validate coordinates - reasonable board bounds
+        for coord_name, coord_val in [
+            ("start_x", start_x),
+            ("start_y", start_y),
+            ("end_x", end_x),
+            ("end_y", end_y),
+        ]:
+            if not isinstance(coord_val, (int, float)):
+                raise IpcError(f"{coord_name} must be a number")
+            if abs(coord_val) > 10000:
+                raise IpcError(f"{coord_name} value {coord_val} outside reasonable bounds")
+
+        # Validate width
+        if not isinstance(width, (int, float)):
+            raise IpcError("width must be a number")
+        if width <= 0:
+            raise IpcError(f"width must be positive, got {width}")
+        if width > 100:
+            raise IpcError(f"width too large: {width}mm (max 100mm)")
+
+        # Validate layer
+        if not isinstance(layer, str) or not layer:
+            raise IpcError("layer must be a non-empty string")
+        if len(layer) > 64:
+            raise IpcError(f"layer name too long: {layer}")
+
+        # Validate net_code
+        if not isinstance(net_code, int):
+            raise IpcError("net_code must be an integer")
         try:
             board = self._kicad.get_board()
             # Import track class from kipy (TrackSegment doesn't exist - use Track)
@@ -513,8 +546,40 @@ class IpcBackend:
 
         Returns:
             UUID of created via as string.
+
+        Raises:
+            IpcError: If parameters are invalid.
         """
         self.require_connection()
+
+        # Validate coordinates
+        for coord_name, coord_val in [("x", x), ("y", y)]:
+            if not isinstance(coord_val, (int, float)):
+                raise IpcError(f"{coord_name} must be a number")
+            if abs(coord_val) > 10000:
+                raise IpcError(f"{coord_name} value {coord_val} outside reasonable bounds")
+
+        # Validate size and drill
+        for dim_name, dim_val in [("size", size), ("drill", drill)]:
+            if not isinstance(dim_val, (int, float)):
+                raise IpcError(f"{dim_name} must be a number")
+            if dim_val <= 0:
+                raise IpcError(f"{dim_name} must be positive, got {dim_val}")
+            if dim_val > 50:
+                raise IpcError(f"{dim_name} too large: {dim_val}mm (max 50mm)")
+
+        # Validate layers
+        if not isinstance(layers, (tuple, list)) or len(layers) != 2:
+            raise IpcError("layers must be a tuple of (start_layer, end_layer)")
+        for i, layer in enumerate(layers):
+            if not isinstance(layer, str) or not layer:
+                raise IpcError(f"layers[{i}] must be a non-empty string")
+            if len(layer) > 64:
+                raise IpcError(f"layer name too long: {layer}")
+
+        # Validate net_code
+        if not isinstance(net_code, int):
+            raise IpcError("net_code must be an integer")
         try:
             board = self._kicad.get_board()
             # Import via class from kipy
@@ -561,8 +626,52 @@ class IpcBackend:
 
         Returns:
              UUID of created zone as string.
+
+        Raises:
+            IpcError: If parameters are invalid.
         """
         self.require_connection()
+
+        # Validate net_code
+        if not isinstance(net_code, int):
+            raise IpcError("net_code must be an integer")
+
+        # Validate layer
+        if not isinstance(layer, str) or not layer:
+            raise IpcError("layer must be a non-empty string")
+        if len(layer) > 64:
+            raise IpcError(f"layer name too long: {layer}")
+
+        # Validate outline_points
+        if not isinstance(outline_points, (list, tuple)):
+            raise IpcError("outline_points must be a list or tuple")
+        if len(outline_points) < 3:
+            raise IpcError("outline_points must have at least 3 points")
+        if len(outline_points) > 1000:
+            raise IpcError("outline_points too large: max 1000 points")
+
+        for i, point in enumerate(outline_points):
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise IpcError(f"outline_points[{i}] must be a tuple of (x, y)")
+            x, y = point
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                raise IpcError(f"outline_points[{i}] coordinates must be numbers")
+            if abs(x) > 10000 or abs(y) > 10000:
+                raise IpcError(f"outline_points[{i}] coordinates outside reasonable bounds")
+
+        # Validate priority
+        if not isinstance(priority, int):
+            raise IpcError("priority must be an integer")
+        if priority < 0:
+            raise IpcError(f"priority must be non-negative, got {priority}")
+
+        # Validate min_thickness
+        if not isinstance(min_thickness, (int, float)):
+            raise IpcError("min_thickness must be a number")
+        if min_thickness <= 0:
+            raise IpcError(f"min_thickness must be positive, got {min_thickness}")
+        if min_thickness > 10:
+            raise IpcError(f"min_thickness too large: {min_thickness}mm (max 10mm)")
         try:
             board = self._kicad.get_board()
             # Import zone class from kipy

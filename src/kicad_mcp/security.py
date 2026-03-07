@@ -215,17 +215,29 @@ class PathValidator:
         return resolved
 
     def _resolve_and_check_traversal(self, path: str | Path) -> Path:
-        """Resolve the path and check for traversal attempts."""
+        """Resolve the path and check for traversal attempts.
+
+        This method:
+        1. Checks for null bytes
+        2. Resolves the path (including ~ and ..)
+        3. Verifies the resolved path is under a trusted root (if any)
+        4. Returns the canonical path
+        """
         path_str = str(path)
 
         # Check for null bytes FIRST - before any path operations
         if "\x00" in path_str:
             raise SecurityError("Path contains null bytes")
 
-        path = Path(path)
+        # Check for obvious path traversal in raw string before any processing
+        # This catches cases like ../../etc/passwd early
+        if ".." in path_str:
+            raise SecurityError(f"Path contains traversal attempt: {path_str}")
+
+        path_obj = Path(path)
         try:
             # Use strict=False for output files that may not exist yet
-            resolved = path.resolve(strict=False)
+            resolved = path_obj.resolve(strict=False)
         except (OSError, ValueError) as e:
             raise SecurityError(f"Invalid path: {path} ({e})") from e
 
@@ -233,44 +245,60 @@ class PathValidator:
         if "\x00" in str(resolved):
             raise SecurityError("Path contains null bytes")
 
-        # Resolve any ".." that may have been resolved
+        # Expand user directory (~)
         try:
             canonical = resolved.expanduser()
         except (OSError, ValueError):
             canonical = resolved
 
-        # Double-check for ".." in the resolved path
-        # This catches cases where the path was constructed to bypass the raw check
-        # e.g., /tmp/../etc/passwd (raw check passes, but resolved path has ..)
+        # Final verification: ensure no ".." remains in the canonical path
+        # This is a defense-in-depth check
         resolved_str = str(canonical)
         if ".." in resolved_str:
-            raise SecurityError(f"Path contains traversal after resolution: {path_str}")
+            raise SecurityError(
+                f"Path contains unresolved traversal after normalization: {path_str}"
+            )
 
         return canonical
 
     def _check_trusted_root(self, resolved: Path) -> None:
-        """Verify the path is under a trusted root."""
-        if not self.trusted_roots:
-            return  # No restrictions
+        """Verify the path is under a trusted root.
 
+        This method ensures that the resolved path is contained within
+        one of the trusted root directories, preventing directory traversal
+        attacks even after path resolution.
+        """
+        if not self.trusted_roots:
+            return  # No restrictions configured
+
+        # Ensure resolved path is absolute and canonical
         resolved_resolved = resolved.resolve()
 
         for root in self.trusted_roots:
             try:
                 root_resolved = root.resolve()
+
                 # Use relative_to to check if path is under root
-                # If this succeeds and doesn't return '..', path is under root
+                # This will raise ValueError if resolved_resolved is not under root_resolved
                 rel = resolved_resolved.relative_to(root_resolved)
-                # Check that the relative path doesn't contain '..' components
-                # (shouldn't happen if relative_to succeeded, but be defensive)
-                if not str(rel).startswith(".."):
-                    return  # Path is under this trusted root
+
+                # Additional defense: verify the relative path doesn't start with '..'
+                # (shouldn't happen if relative_to succeeded, but be extra cautious)
+                rel_str = str(rel)
+                if rel_str.startswith("..") or rel_str.startswith("..\\"):
+                    continue  # Try next root
+
+                # Path is confirmed to be under this trusted root
+                return
+
             except ValueError:
-                # resolved_resolved is not under root_resolved
+                # resolved_resolved is not under this root_resolved
+                # Try the next trusted root
                 continue
 
+        # No trusted root matched
         roots = [str(r) for r in self.trusted_roots]
-        raise SecurityError(f"Path {resolved} is not under any trusted root: {roots}")
+        raise SecurityError(f"Path '{resolved}' is not under any trusted root directory: {roots}")
 
     @staticmethod
     def _check_extension(path: Path, allowed: frozenset[str]) -> None:
@@ -503,7 +531,20 @@ class SecureSubprocess:
         """Validate value against known-safe set for specific flags."""
         safe_values: dict[str, frozenset[str]] = {
             "format": frozenset(
-                {"json", "svg", "pdf", "dxf", "gerber", "step", "vrml", "pos", "gerbers"}
+                {
+                    "json",
+                    "svg",
+                    "pdf",
+                    "dxf",
+                    "gerber",
+                    "step",
+                    "vrml",
+                    "pos",
+                    "gerbers",
+                    "plain",
+                    "commit",
+                    "about",
+                }
             ),
             "units": frozenset({"mm", "mil", "in", "cm"}),
         }

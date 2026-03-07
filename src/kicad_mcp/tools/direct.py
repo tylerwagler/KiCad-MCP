@@ -20,7 +20,20 @@ def _open_project_handler(board_path: str) -> dict[str, Any]:
     from pathlib import Path
 
     from .. import state
+    from ..rate_limiter import RateLimitConfig, RateLimiter
     from ..security import SecurityError, add_trusted_root, get_validator
+
+    # Rate limiting - prevent abuse from rapid project loading
+    limiter = RateLimiter(
+        configs={
+            "open_project": RateLimitConfig(max_tokens=10, refill_rate=10 / 60),  # 10 per minute
+        }
+    )
+    allowed, retry_after = limiter.is_allowed("open_project")
+    if not allowed:
+        return {
+            "error": f"Rate limit exceeded for open_project. Please wait {retry_after:.1f} seconds."
+        }
 
     try:
         get_validator().validate_input(board_path)

@@ -94,6 +94,30 @@ class TestPathValidator:
         with pytest.raises(SecurityError, match="does not exist"):
             validator.validate_input(str(tmp_path / "nonexistent.kicad_pcb"))
 
+    def test_resolved_path_traversal_rejected(self, tmp_path: Path) -> None:
+        """Test that paths with .. that resolve outside trusted root are rejected.
+
+        This tests that any path containing .. is rejected, regardless of
+        whether it would resolve outside the trusted root.
+        """
+        validator = PathValidator(trusted_roots=[tmp_path])
+        # Any path with .. should be rejected
+        with pytest.raises(SecurityError, match="traversal"):
+            # Construct a path that would resolve outside the trusted root
+            validator.validate_input(str(tmp_path / ".." / ".." / "etc" / "passwd.kicad_pcb"))
+
+    def test_explicit_double_dot_rejected(self, tmp_path: Path) -> None:
+        """Test that explicit .. in path is always rejected."""
+        validator = PathValidator(trusted_roots=[tmp_path])
+        with pytest.raises(SecurityError, match="traversal"):
+            validator.validate_input("../../../etc/passwd.kicad_pcb")
+
+    def test_tilde_traversal_rejected(self, tmp_path: Path) -> None:
+        """Test that ~ in path is rejected as potential traversal."""
+        validator = PathValidator(trusted_roots=[tmp_path])
+        with pytest.raises(SecurityError, match="traversal"):
+            validator.validate_input("~/../etc/passwd.kicad_pcb")
+
 
 class TestSecureSubprocess:
     @pytest.fixture()

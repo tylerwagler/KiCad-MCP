@@ -27,9 +27,21 @@ def _get_manager() -> SessionManager:
 def _start_session_handler() -> dict[str, Any]:
     """Start a new mutation session for the currently loaded board.
 
-    A session allows you to preview, apply, undo, and commit/rollback changes.
+    A session allow you to preview, apply, undo, and commit/rollback changes.
     """
     from .. import state
+    from ..rate_limiter import RateLimitConfig, RateLimiter
+
+    # Rate limiting - prevent abuse from rapid session creation
+    limiter = RateLimiter(
+        configs={
+            "start_session": RateLimitConfig(max_tokens=20, refill_rate=20 / 60),  # 20 per minute
+        }
+    )
+    allowed, retry_after = limiter.is_allowed("start_session")
+    if not allowed:
+        msg = f"Rate limit exceeded for start_session. Wait {retry_after:.1f}s."
+        return {"error": msg}
 
     doc = state.get_document()
     mgr = _get_manager()

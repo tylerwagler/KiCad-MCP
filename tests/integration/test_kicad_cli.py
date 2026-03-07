@@ -31,7 +31,8 @@ class TestKiCadCliBasic:
         cli = KiCadCli()
         version = cli.version()
         assert version  # Non-empty string
-        assert "9" in version or "8" in version  # KiCad 8 or 9
+        # KiCad 8, 9, or 10+ (future-proof for newer versions)
+        assert any(v in version for v in ("8", "9", "10", "11", "12"))
 
     def test_is_available(self) -> None:
         assert KiCadCli.is_available()

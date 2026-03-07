@@ -7,7 +7,15 @@ from ..sexp.parser import parse as sexp_parse
 
 
 def find_footprint(doc: Document, reference: str) -> SExp | None:
-    """Find a footprint node by reference designator."""
+    """Find a footprint node by reference designator.
+
+    Args:
+        doc: The document to search.
+        reference: The reference designator to find (e.g., 'R1').
+
+    Returns:
+        The footprint node if found, None otherwise.
+    """
     for fp_node in doc.root.find_all("footprint"):
         for prop in fp_node.find_all("property"):
             if prop.first_value == "Reference":
@@ -18,6 +26,13 @@ def find_footprint(doc: Document, reference: str) -> SExp | None:
 
 
 def deep_copy_doc(doc: Document) -> Document:
-    """Create a deep copy of a Document for working changes."""
+    """Create a deep copy of a Document for working changes.
+
+    Args:
+        doc: The document to copy.
+
+    Returns:
+        A new Document with the same content.
+    """
     new_root = sexp_parse(doc._raw_text)
     return Document(path=doc.path, root=new_root, raw_text=doc._raw_text)
