@@ -25,6 +25,23 @@ def find_footprint(doc: Document, reference: str) -> SExp | None:
     return None
 
 
+def find_footprint_by_uuid(doc: Document, uuid: str) -> SExp | None:
+    """Find a footprint node by its UUID.
+
+    Args:
+        doc: The document to search.
+        uuid: The UUID value to match.
+
+    Returns:
+        The footprint node if found, None otherwise.
+    """
+    for fp_node in doc.root.find_all("footprint"):
+        uuid_node = fp_node.get("uuid")
+        if uuid_node is not None and uuid_node.first_value == uuid:
+            return fp_node
+    return None
+
+
 def deep_copy_doc(doc: Document) -> Document:
     """Create a deep copy of a Document for working changes.
 
