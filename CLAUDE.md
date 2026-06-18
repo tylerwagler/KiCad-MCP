@@ -61,11 +61,11 @@ src/kicad_mcp/
 
 The `backends/` package abstracts how we talk to KiCad:
 
-1. **S-expression parser** (`sexp/` + `schema/`): Pure Python, zero dependencies. Used for all **read** operations. Parses `.kicad_pcb`, `.kicad_sch`, `.kicad_mod` files directly. Must preserve round-trip fidelity (parse → modify → write back without losing formatting/comments).
-2. **kicad-cli**: For operations KiCad does better (DRC, Gerber export, PDF rendering). Requires KiCad installed.
-3. **KiCad IPC API** (kipy): For real-time UI sync when KiCad is running. Optional, KiCad 9+ only.
+1. **S-expression parser** (`sexp/` + `schema/`): Pure Python, zero dependencies. The fallback read path and the source of truth for file mutations, **schematics** (no IPC schematic API in KiCad 9/10), and version-controlled round-trip fidelity (parse → modify → write back without losing formatting/comments). `state.get_document()` is always the parsed tree.
+2. **kicad-cli**: For operations KiCad does better and that IPC does not expose — **DRC, Gerber/PDF/STEP/SVG export, rendering**. Requires KiCad installed.
+3. **KiCad IPC API** (kipy ≥ 0.7): The **live-preferred** PCB backend. When KiCad is running with the IPC server enabled, board **reads** (`get_summary`/`get_footprints`) reflect the live, possibly-unsaved board, and session **commits** push as one atomic kipy commit (a single undo step). PCB-only, optional, KiCad 9+.
 
-The backend factory selects the best available backend at runtime. Read operations should never require KiCad to be installed.
+**Read routing** lives in `board_provider.py`: live (IPC) when connected, else the parser — consumers call `state.get_summary()`/`state.get_footprints()` unchanged. Reads never *require* KiCad (parser fallback). **Net codes are deprecated in KiCad 10**, so live nets bind by name. DRC stays on kicad-cli, routing stays on Freerouting, schematics stay on the parser — kipy exposes none of those. Verify the live path with `scripts/verify_kipy.py`.
 
 ### Session Model (Query-Before-Commit)
 
