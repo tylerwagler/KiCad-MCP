@@ -172,6 +172,48 @@ class TestSecureSubprocess:
         with pytest.raises(SecurityError, match="Absolute paths not allowed"):
             secure.validate_command(["kicad-cli", "pcb", "drc", "/etc/passwd.kicad_pcb"])
 
+    def test_allow_absolute_export_output(self, secure: SecureSubprocess) -> None:
+        """Absolute export-output paths (e.g. SVG/PDF) must be accepted."""
+        secure.validate_command(
+            [
+                "kicad-cli",
+                "pcb",
+                "export",
+                "svg",
+                "--output",
+                "/tmp/board_view.svg",
+                "--layers",
+                "F.Cu,B.Cu,Edge.Cuts",
+                "board.kicad_pcb",
+            ]
+        )
+
+    def test_reject_suspicious_absolute_export_path(self, secure: SecureSubprocess) -> None:
+        """A masquerading system path must stay rejected even with an export extension."""
+        with pytest.raises(SecurityError, match="Absolute paths not allowed"):
+            secure._validate_file_path("/etc/passwd.svg")
+
+    def test_allow_comma_separated_layers(self, secure: SecureSubprocess) -> None:
+        """A comma-separated --layers value is a safe literal."""
+        secure.validate_command(
+            [
+                "kicad-cli",
+                "pcb",
+                "export",
+                "pdf",
+                "--layers",
+                "F.Cu,B.Cu,F.SilkS,Edge.Cuts",
+                "board.kicad_pcb",
+            ]
+        )
+
+    def test_reject_layers_with_unsafe_token(self, secure: SecureSubprocess) -> None:
+        """A comma list element with shell-meta characters is rejected as a literal."""
+        with pytest.raises(SecurityError, match="Invalid value"):
+            secure.validate_command(
+                ["kicad-cli", "pcb", "export", "pdf", "--layers", "F.Cu,bad;token", "b.kicad_pcb"]
+            )
+
     def test_reject_invalid_flag_value(self, secure: SecureSubprocess) -> None:
         """Test that invalid flag values are rejected."""
         with pytest.raises(SecurityError, match="Invalid value"):

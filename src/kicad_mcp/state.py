@@ -37,33 +37,59 @@ def load_board(path: str) -> BoardSummary:
 
 
 def get_document() -> Document:
-    """Get the currently loaded document, or raise."""
+    """Get the currently loaded parsed document, or raise.
+
+    Always the parsed S-expression tree (never IPC) — file mutations and DSN
+    export need the tree. Use :func:`get_summary`/:func:`get_footprints` for
+    live-preferred reads.
+    """
     with _lock:
         if _current_doc is None:
             raise RuntimeError("No board loaded. Use open_project first.")
         return _current_doc
 
 
-def get_summary() -> BoardSummary:
-    """Get the current board summary, or raise."""
+def parser_summary() -> BoardSummary:
+    """Board summary from the parsed file (parser path only), or raise."""
     with _lock:
         if _current_summary is None:
             raise RuntimeError("No board loaded. Use open_project first.")
         return _current_summary
 
 
-def get_footprints() -> list[Footprint]:
-    """Get the current footprint list, or raise."""
+def parser_footprints() -> list[Footprint]:
+    """Footprint list from the parsed file (parser path only), or raise."""
     with _lock:
         if _current_footprints is None:
             raise RuntimeError("No board loaded. Use open_project first.")
         return _current_footprints
 
 
-def is_loaded() -> bool:
-    """Check if a board is currently loaded."""
+def is_parser_loaded() -> bool:
+    """Whether a board file has been parsed into memory."""
     with _lock:
         return _current_doc is not None
+
+
+def get_summary() -> BoardSummary:
+    """Board summary — live (IPC) when KiCad is connected, else the parsed file."""
+    from . import board_provider
+
+    return board_provider.get_summary()
+
+
+def get_footprints() -> list[Footprint]:
+    """Footprints — live (IPC) when KiCad is connected, else the parsed file."""
+    from . import board_provider
+
+    return board_provider.get_footprints()
+
+
+def is_loaded() -> bool:
+    """Whether a board is available — a parsed file or a live IPC board."""
+    from . import board_provider
+
+    return board_provider.active_source() != "none"
 
 
 def get_board_path() -> str | None:

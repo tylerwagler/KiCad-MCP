@@ -8,11 +8,14 @@ from typing import Any
 from .types import ChangeRecord
 
 
-def try_ipc_push(applied: list[ChangeRecord]) -> int:
-    """Attempt to push applied changes to KiCad via IPC.
+def try_ipc_push(applied: list[ChangeRecord], net_names: dict[int, str] | None = None) -> int:
+    """Push all applied changes to KiCad as ONE atomic commit (a single undo step).
 
-    Returns the number of changes successfully pushed, or 0 if IPC
-    is not available.
+    Uses the backend's :meth:`commit` context so the edits are pushed together on
+    success or dropped together on error. ``net_names`` maps net numbers (from the
+    parsed working doc) to names so tracks/vias bind by name — net codes are
+    deprecated in KiCad 10. Returns the number of changes staged, or 0 if IPC is
+    unavailable or the commit failed.
     """
     try:
         from ..backends.ipc_api import IpcBackend
@@ -23,75 +26,85 @@ def try_ipc_push(applied: list[ChangeRecord]) -> int:
     if not ipc.is_connected():
         return 0
 
+    names = net_names or {}
     pushed = 0
     has_routing_changes = False
-    for change in applied:
-        try:
-            _push_change_to_ipc(ipc, change)
-            pushed += 1
-            if change.operation in ("route_trace", "add_via", "create_zone"):
-                has_routing_changes = True
-        except Exception:
-            pass  # IPC push is best-effort
+    try:
+        with ipc.commit("MCP session commit") as board:
+            for change in applied:
+                if _stage_change_to_ipc(ipc, board, change, names):
+                    pushed += 1
+                    if change.operation in ("route_trace", "add_via", "create_zone"):
+                        has_routing_changes = True
+    except Exception:
+        return 0  # the commit was dropped atomically; nothing landed in the GUI
 
-    if pushed > 0:
+    if has_routing_changes:
         with contextlib.suppress(Exception):
-            ipc.commit_to_undo()
-
-        if has_routing_changes:
-            with contextlib.suppress(Exception):
-                ipc.refill_zones()
+            ipc.refill_zones()
 
     return pushed
 
 
-def _push_change_to_ipc(ipc: Any, change: ChangeRecord) -> None:
-    """Push a single change to KiCad via IPC."""
+def _stage_change_to_ipc(
+    ipc: Any, board: Any, change: ChangeRecord, net_names: dict[int, str]
+) -> bool:
+    """Stage one change onto the open-commit ``board``. Returns True if staged."""
     op = change.operation
     if op == "move_component":
         x, y = parse_at_coords(change.after_snapshot)
         if x is not None and y is not None:
-            ipc.move_footprint(change.target, x, y)
+            ipc._stage_move(board, change.target, x, y)
+            return True
     elif op == "rotate_component":
         parts = change.after_snapshot.strip("()").split()
         if len(parts) >= 4:
-            angle = float(parts[3])
-            ipc.rotate_footprint(change.target, angle)
+            ipc._stage_rotate(board, change.target, float(parts[3]))
+            return True
     elif op == "delete_component":
-        ipc.delete_footprint(change.target)
+        ipc._stage_delete(board, change.target)
+        return True
     elif op == "route_trace":
-        params = parse_segment_snapshot(change.after_snapshot)
-        if params:
-            ipc.create_track_segment(
-                params["start_x"],
-                params["start_y"],
-                params["end_x"],
-                params["end_y"],
-                params["width"],
-                params["layer"],
-                params["net"],
+        p = parse_segment_snapshot(change.after_snapshot)
+        if p:
+            ipc._stage_track(
+                board,
+                p["start_x"],
+                p["start_y"],
+                p["end_x"],
+                p["end_y"],
+                p["width"],
+                p["layer"],
+                p["net"],
+                net_names.get(p["net"]),
             )
+            return True
     elif op == "add_via":
-        params = parse_via_snapshot(change.after_snapshot)
-        if params:
-            ipc.create_via(
-                params["x"],
-                params["y"],
-                params["size"],
-                params["drill"],
-                (params["layer_start"], params["layer_end"]),
-                params["net"],
+        p = parse_via_snapshot(change.after_snapshot)
+        if p:
+            ipc._stage_via(
+                board,
+                p["x"],
+                p["y"],
+                p["size"],
+                p["drill"],
+                p["net"],
+                net_names.get(p["net"]),
             )
+            return True
     elif op == "create_zone":
-        params = parse_zone_snapshot(change.after_snapshot)
-        if params:
-            ipc.create_zone(
-                params["net"],
-                params["layer"],
-                params["outline_points"],
-                params.get("priority", 0),
-                params.get("min_thickness", 0.25),
+        p = parse_zone_snapshot(change.after_snapshot)
+        if p:
+            ipc._stage_zone(
+                board,
+                p["net"],
+                p["layer"],
+                p["outline_points"],
+                p.get("priority", 0),
+                p.get("min_thickness", 0.25),
             )
+            return True
+    return False
 
 
 def parse_at_coords(snapshot: str) -> tuple[float | None, float | None]:

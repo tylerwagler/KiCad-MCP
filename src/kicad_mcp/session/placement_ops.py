@@ -5,10 +5,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from ..exceptions import ResourceNotFoundError
 from ..security import SecurityError
 from ..sexp import SExp
-from ..sexp.parser import _quote_if_needed, parse as sexp_parse
-from ..exceptions import ResourceNotFoundError
+from ..sexp.parser import _quote_if_needed
+from ..sexp.parser import parse as sexp_parse
 from .helpers import find_footprint
 from .types import (
     _LAYER_FLIP,
@@ -316,6 +317,90 @@ def place_from_kicad_mod(
         target=reference,
         before_snapshot="",
         after_snapshot=after,
+        applied=True,
+    )
+    session.changes.append(record)
+    return record
+
+
+def read_position(session: Session, reference: str) -> dict[str, float]:
+    """Read a component's current position and rotation.
+
+    Returns a dict with keys ``x``, ``y``, ``angle``. Raises if not found.
+    """
+    require_active(session)
+    assert session._working_doc is not None
+
+    fp_node = find_footprint(session._working_doc, reference)
+    if fp_node is None:
+        raise ValueError(f"Component {reference!r} not found")
+
+    at_node = fp_node.get("at")
+    vals = at_node.atom_values if at_node else []
+    return {
+        "x": float(vals[0]) if len(vals) > 0 else 0.0,
+        "y": float(vals[1]) if len(vals) > 1 else 0.0,
+        "angle": float(vals[2]) if len(vals) > 2 else 0.0,
+    }
+
+
+def apply_duplicate(
+    session: Session,
+    reference: str,
+    new_reference: str,
+    x: float,
+    y: float,
+) -> ChangeRecord:
+    """Duplicate an existing component to a new reference at a new position.
+
+    Clones the full footprint (pads, graphics, etc.), assigns a fresh reference
+    and regenerated UUIDs, and places it at ``(x, y)``.
+    """
+    require_active(session)
+    assert session._working_doc is not None
+
+    source = find_footprint(session._working_doc, reference)
+    if source is None:
+        raise ValueError(f"Component {reference!r} not found")
+
+    if find_footprint(session._working_doc, new_reference) is not None:
+        raise ValueError(f"Component {new_reference!r} already exists on the board")
+
+    # Deep-copy the source footprint by re-parsing its serialized form.
+    fp_node = sexp_parse(source.to_string())
+
+    # Move it to the requested position (preserve rotation if present).
+    at_node = fp_node.get("at")
+    if at_node is not None and len(at_node.children) >= 2:
+        at_node.children[0] = _make_atom(str(x))
+        at_node.children[1] = _make_atom(str(y))
+
+    # Regenerate every UUID in the cloned subtree to avoid collisions.
+    for uuid_node in fp_node.find_all("uuid"):
+        if uuid_node.children:
+            uuid_node.children[0] = _make_quoted(str(uuid.uuid4()))
+
+    # Rename the Reference property.
+    for prop in fp_node.find_all("property"):
+        if prop.first_value == "Reference":
+            atom_idx = 0
+            for i, child in enumerate(prop.children):
+                if child.is_atom:
+                    atom_idx += 1
+                    if atom_idx == 2:
+                        prop.children[i] = _make_quoted(new_reference)
+                        break
+            break
+
+    session._working_doc.root.children.append(fp_node)
+
+    record = ChangeRecord(
+        change_id=str(uuid.uuid4())[:8],
+        operation="place_component",
+        description=f"Duplicate {reference} as {new_reference} at ({x}, {y})",
+        target=new_reference,
+        before_snapshot="",
+        after_snapshot=fp_node.to_string(),
         applied=True,
     )
     session.changes.append(record)

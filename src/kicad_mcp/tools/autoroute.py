@@ -517,7 +517,11 @@ def _preview_route_handler(
 
 register_tool(
     name="auto_route_net",
-    description="Auto-route a single net or pad pair using A* pathfinding.",
+    description=(
+        "[Legacy] Auto-route a single net or pad pair using built-in A* pathfinding. "
+        "Prefer 'autoroute_freerouting' for real-quality routing; this remains as an "
+        "offline fallback when Freerouting is unavailable."
+    ),
     parameters={
         "session_id": {"type": "string", "description": "Active session ID."},
         "net_name": {"type": "string", "description": "Net name to route."},
@@ -547,7 +551,11 @@ register_tool(
 
 register_tool(
     name="auto_route_all",
-    description="Batch-route all unrouted nets using A* pathfinding.",
+    description=(
+        "[Legacy] Batch-route all unrouted nets using built-in A* pathfinding. "
+        "Prefer 'autoroute_freerouting' for real-quality routing; this remains as an "
+        "offline fallback when Freerouting is unavailable."
+    ),
     parameters={
         "session_id": {"type": "string", "description": "Active session ID."},
         "trace_width": {"type": "number", "description": "Trace width (mm). Default: 0.25."},
@@ -572,7 +580,10 @@ register_tool(
 
 register_tool(
     name="preview_route",
-    description="Quick feasibility estimate for a route (obstacle density, distance).",
+    description=(
+        "[Legacy] Quick feasibility estimate for a route (obstacle density, distance), "
+        "tied to the built-in A* router. Prefer 'autoroute_freerouting' for actual routing."
+    ),
     parameters={
         "session_id": {"type": "string", "description": "Active session ID."},
         "start_x": {"type": "number", "description": "Start X (mm)."},

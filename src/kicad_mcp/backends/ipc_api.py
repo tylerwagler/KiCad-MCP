@@ -11,8 +11,10 @@ is not running.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+from collections.abc import Iterator
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,8 @@ class IpcBackend:
     def __init__(self) -> None:
         self._kicad: Any = None  # kipy.KiCad instance
         self._connected: bool = False
+        self._version: str | None = None  # KiCad version string, set on connect
+        self._version_ok: bool | None = None  # result of kipy check_version()
 
     @classmethod
     def get(cls) -> IpcBackend:
@@ -89,22 +93,92 @@ class IpcBackend:
             logger.info("kipy not installed — IPC backend unavailable")
             return False
 
-        if socket_path is None:
-            socket_path = self._detect_socket()
+        candidates = [socket_path] if socket_path else self._candidate_sockets()
+        board_serving = None  # a live socket that can serve PCB commands
+        alive_only = None  # a live socket that answers ping/version but has no board
 
-        try:
-            if socket_path:
-                self._kicad = KiCad(socket_path)
-            else:
-                self._kicad = KiCad()
-            self._connected = True
-            logger.info("Connected to KiCad IPC API")
-            return True
-        except Exception as exc:
-            logger.info("Failed to connect to KiCad IPC: %s", exc)
+        for cand in candidates:
+            try:
+                kc = KiCad(cand) if cand else KiCad()
+                # kipy connects lazily — force a round-trip so a dead socket is
+                # rejected instead of failing on every later call.
+                kc.get_version()
+            except Exception:
+                continue
+            # Prefer a socket that actually serves the PCB. A standalone pcbnew
+            # owns its own api-<pid>.sock; the default api.sock is often the
+            # project manager, which answers ping/version but has no board handler.
+            try:
+                kc.get_board()
+                board_serving = (kc, cand)
+                break
+            except Exception:
+                if alive_only is None:
+                    alive_only = (kc, cand)
+
+        chosen = board_serving or alive_only
+        if chosen is None:
+            logger.info("Failed to connect to KiCad IPC (no live socket)")
             self._kicad = None
             self._connected = False
+            self._version = None
+            self._version_ok = None
             return False
+
+        self._kicad, sock = chosen
+        self._connected = True
+        self._record_version()
+        logger.info(
+            "Connected to KiCad IPC API (version %s, socket %s, board=%s)",
+            self._version or "?",
+            sock or "default",
+            board_serving is not None,
+        )
+        return True
+
+    @staticmethod
+    def _candidate_sockets() -> list[str | None]:
+        """Sockets to try, most board-likely first.
+
+        Honors ``KICAD_API_SOCKET`` if set. Otherwise prefers per-process
+        ``api-<pid>.sock`` endpoints (a standalone PCB editor) over the generic
+        ``api.sock`` (often the project manager), then kipy's own default.
+        """
+        env = os.environ.get("KICAD_API_SOCKET")
+        if env:
+            return [env]
+        import glob
+
+        socks = sorted(glob.glob("/tmp/kicad/api-*.sock"), reverse=True)
+        candidates: list[str | None] = [f"ipc://{s}" for s in socks]
+        candidates.append(None)  # kipy default (/tmp/kicad/api.sock or platform default)
+        return candidates
+
+    def _record_version(self) -> None:
+        """Capture the KiCad version and kipy compatibility (best-effort)."""
+        try:
+            self._version = str(self._kicad.get_version())
+        except Exception:  # noqa: BLE001 — version reporting is best-effort
+            self._version = None
+        try:
+            # kipy verifies its protobuf is compatible with the running KiCad.
+            self._version_ok = bool(self._kicad.check_version())
+        except Exception:  # noqa: BLE001 — older kipy/KiCad may lack check_version
+            self._version_ok = None
+        if self._version_ok is False:
+            logger.warning(
+                "kipy/KiCad version mismatch (KiCad %s) — IPC behavior may be unreliable",
+                self._version or "?",
+            )
+
+    def version_info(self) -> dict[str, Any]:
+        """Report connection + version/compatibility status for diagnostics."""
+        return {
+            "connected": self.is_connected(),
+            "kicad_version": self._version,
+            "version_compatible": self._version_ok,
+            "kipy_available": _KIPY_AVAILABLE,
+        }
 
     def disconnect(self) -> None:
         """Disconnect from KiCad's IPC API."""
@@ -122,6 +196,11 @@ class IpcBackend:
                 "KiCad IPC not available. "
                 "Ensure KiCad 9+ is running with IPC enabled, and kipy is installed."
             )
+
+    def live_board(self) -> Any:
+        """Return the live kipy Board object (raises if not connected)."""
+        self.require_connection()
+        return self._kicad.get_board()
 
     # ── Socket discovery ────────────────────────────────────────────
 
@@ -167,13 +246,8 @@ class IpcBackend:
         try:
             from kipy.util.units import to_mm
 
-            # Handle type mismatch: kipy.to_mm expects int but nm may be float
-            # Preserve precision by checking type first
-            if isinstance(nm, float):
-                # Convert float nanometers to mm directly
-                result = nm / 1_000_000
-            else:
-                result = to_mm(int(nm))
+            # kipy.to_mm expects int; for float nm, divide directly to preserve precision.
+            result = nm / 1_000_000 if isinstance(nm, float) else to_mm(int(nm))
             return float(result)
         except ImportError:
             return nm / 1_000_000
@@ -203,6 +277,85 @@ class IpcBackend:
             return canonical_name(layer_int)  # type: ignore[arg-type]
         except ImportError:
             return str(layer_int)
+
+    @staticmethod
+    def _layer_enum(layer: str) -> int:
+        """Convert a canonical layer name (e.g. 'F.Cu') to a kipy BoardLayer enum int."""
+        from kipy.util.board_layer import layer_from_canonical_name
+
+        return layer_from_canonical_name(layer)
+
+    @staticmethod
+    def _resolve_net(board: Any, net_code: int = 0, net_name: str | None = None) -> Any:
+        """Return the live Net object matching a name (preferred) or code.
+
+        A net must be taken from the live board (``Net.code`` is read-only and
+        ``Net`` assignment copies the proto). **Net codes are deprecated and slated
+        for removal in KiCad 10**, so name matching is preferred; code matching is a
+        best-effort fallback for callers that only have a number.
+        """
+        if not net_name and not net_code:
+            return None
+        try:
+            nets = list(board.get_nets())
+        except Exception:  # noqa: BLE001 — net lookup is best-effort
+            return None
+        if net_name:
+            for net in nets:
+                if getattr(net, "name", None) == net_name:
+                    return net
+        if net_code:
+            for net in nets:
+                with contextlib.suppress(Exception):
+                    if int(net.code) == net_code:
+                        return net
+        return None
+
+    @staticmethod
+    def _item_id(created: Any, fallback: Any) -> str:
+        """Extract the UUID/KIID string of a newly created item."""
+        item = created[0] if isinstance(created, list) and created else fallback
+        return str(getattr(item, "id", "") or "")
+
+    @staticmethod
+    def _net_of(item: Any) -> tuple[int, str]:
+        """Return (code, name) for an item's net.
+
+        Net codes are deprecated in KiCad 10 (reading ``net.code`` emits a warning
+        and the value is going away), so we report 0 and treat the **name** as the
+        net identity.
+        """
+        net = getattr(item, "net", None)
+        if net is None:
+            return 0, ""
+        return 0, getattr(net, "name", "") or ""
+
+    # ── Atomic transaction ──────────────────────────────────────────
+
+    @contextlib.contextmanager
+    def commit(self, message: str) -> Iterator[Any]:
+        """Run edits as one atomic KiCad commit (a single undo-stack entry).
+
+        Yields the live board; ``create_items``/``update_items``/``remove_items``
+        called inside the block are pushed together on success, or dropped on error::
+
+            with ipc.commit("MCP: move U1") as board:
+                board.update_items(fp)
+
+        This is the correct kipy transaction shape — edits must happen *between*
+        ``begin_commit`` and ``push_commit``.
+        """
+        self.require_connection()
+        board = self._kicad.get_board()
+        commit_obj = board.begin_commit()
+        try:
+            yield board
+        except Exception:
+            with contextlib.suppress(Exception):
+                board.drop_commit(commit_obj)
+            raise
+        else:
+            board.push_commit(commit_obj, message)
 
     # ── Read operations ─────────────────────────────────────────────
 
@@ -295,15 +448,12 @@ class IpcBackend:
                         "y": self._nm_to_mm(track.end.y),
                     },
                     "width": self._nm_to_mm(track.width),
-                    "layer": str(track.layer) if hasattr(track, "layer") else "",
-                    "net_code": track.net_code if hasattr(track, "net_code") else 0,
+                    "layer": self._layer_name(track.layer) if hasattr(track, "layer") else "",
                 }
-                if hasattr(track, "net") and track.net:
-                    entry["net_name"] = track.net.name if hasattr(track.net, "name") else ""
-                else:
-                    entry["net_name"] = ""
-                if hasattr(track, "uuid"):
-                    entry["uuid"] = str(track.uuid)
+                net_code, net_name = self._net_of(track)
+                entry["net_code"] = net_code
+                entry["net_name"] = net_name
+                entry["uuid"] = str(getattr(track, "id", "") or "")
                 result.append(entry)
             return result
         except Exception as exc:
@@ -326,24 +476,26 @@ class IpcBackend:
                         "x": self._nm_to_mm(via.position.x),
                         "y": self._nm_to_mm(via.position.y),
                     },
-                    "size": self._nm_to_mm(via.width) if hasattr(via, "width") else 0.0,
-                    "drill": self._nm_to_mm(via.drill) if hasattr(via, "drill") else 0.0,
-                    "net_code": via.net_code if hasattr(via, "net_code") else 0,
+                    "size": self._nm_to_mm(via.diameter) if hasattr(via, "diameter") else 0.0,
+                    "drill": (
+                        self._nm_to_mm(via.drill_diameter)
+                        if hasattr(via, "drill_diameter")
+                        else 0.0
+                    ),
                 }
-                # Layer span for via
-                if hasattr(via, "layer_start") and hasattr(via, "layer_end"):
-                    entry["layers"] = {
-                        "start": str(via.layer_start),
-                        "end": str(via.layer_end),
-                    }
-                else:
-                    entry["layers"] = {"start": "", "end": ""}
-                if hasattr(via, "net") and via.net:
-                    entry["net_name"] = via.net.name if hasattr(via.net, "name") else ""
-                else:
-                    entry["net_name"] = ""
-                if hasattr(via, "uuid"):
-                    entry["uuid"] = str(via.uuid)
+                # Layer span derives from the padstack's layer enums (best-effort).
+                entry["layers"] = {"start": "", "end": ""}
+                with contextlib.suppress(Exception):
+                    layers = list(via.padstack.layers)
+                    if layers:
+                        entry["layers"] = {
+                            "start": self._layer_name(layers[0]),
+                            "end": self._layer_name(layers[-1]),
+                        }
+                net_code, net_name = self._net_of(via)
+                entry["net_code"] = net_code
+                entry["net_name"] = net_name
+                entry["uuid"] = str(getattr(via, "id", "") or "")
                 result.append(entry)
             return result
         except Exception as exc:
@@ -361,34 +513,30 @@ class IpcBackend:
             zones = board.get_zones()
             result = []
             for zone in zones:
+                layer_name = ""
+                with contextlib.suppress(Exception):
+                    zlayers = list(zone.layers)
+                    if zlayers:
+                        layer_name = self._layer_name(zlayers[0])
+
+                net_code, net_name = self._net_of(zone)
                 entry = {
-                    "net_code": zone.net_code if hasattr(zone, "net_code") else 0,
-                    "layer": str(zone.layer) if hasattr(zone, "layer") else "",
-                    "filled": zone.is_filled if hasattr(zone, "is_filled") else False,
-                    "priority": zone.priority if hasattr(zone, "priority") else 0,
+                    "net_code": net_code,
+                    "net_name": net_name,
+                    "layer": layer_name,
+                    "filled": bool(getattr(zone, "filled", False)),
+                    "priority": getattr(zone, "priority", 0),
+                    "uuid": str(getattr(zone, "id", "") or ""),
                 }
-                if hasattr(zone, "net") and zone.net:
-                    entry["net_name"] = zone.net.name if hasattr(zone.net, "name") else ""
-                else:
-                    entry["net_name"] = ""
-                # Outline points (simplified)
-                if hasattr(zone, "outline") and zone.outline:
-                    try:
-                        points = []
-                        for pt in zone.outline:
-                            points.append(
-                                {
-                                    "x": self._nm_to_mm(pt.x),
-                                    "y": self._nm_to_mm(pt.y),
-                                }
-                            )
-                        entry["outline_points"] = points
-                    except Exception:
-                        entry["outline_points"] = []
-                else:
-                    entry["outline_points"] = []
-                if hasattr(zone, "uuid"):
-                    entry["uuid"] = str(zone.uuid)
+                # Outline points from the polygon's PolyLine nodes (best-effort).
+                entry["outline_points"] = []
+                with contextlib.suppress(Exception):
+                    nodes = zone.outline.outline.nodes
+                    entry["outline_points"] = [
+                        {"x": self._nm_to_mm(n.point.x), "y": self._nm_to_mm(n.point.y)}
+                        for n in nodes
+                        if getattr(n, "has_point", True)
+                    ]
                 result.append(entry)
             return result
         except Exception as exc:
@@ -505,30 +653,40 @@ class IpcBackend:
         if not isinstance(net_code, int):
             raise IpcError("net_code must be an integer")
         try:
-            board = self._kicad.get_board()
-            # Import track class from kipy (TrackSegment doesn't exist - use Track)
-            from kipy.board_types import Track
-
-            # Create track object
-            segment = Track()
-            segment.start = _Vector2.from_xy(self._mm_to_nm(start_x), self._mm_to_nm(start_y))
-            segment.end = _Vector2.from_xy(self._mm_to_nm(end_x), self._mm_to_nm(end_y))
-            segment.width = self._mm_to_nm(width)
-            segment.net_code = net_code  # type: ignore[attr-defined]
-            # Layer assignment will depend on kipy API - may need layer enum
-            if hasattr(segment, "layer"):
-                segment.layer = layer  # type: ignore[assignment]
-
-            # Add to board
-            board.create_items(segment)
-
-            # Return UUID for tracking (Track uses 'id' not 'uuid')
-            uuid_str = str(segment.id) if hasattr(segment, "id") else ""
-            return uuid_str
+            with self.commit("MCP: add track") as board:
+                return self._stage_track(
+                    board, start_x, start_y, end_x, end_y, width, layer, net_code
+                )
         except IpcError:
             raise
         except Exception as exc:
             raise IpcError(f"Failed to create track segment: {exc}") from exc
+
+    def _stage_track(
+        self,
+        board: Any,
+        start_x: float,
+        start_y: float,
+        end_x: float,
+        end_y: float,
+        width: float,
+        layer: str,
+        net_code: int,
+        net_name: str | None = None,
+    ) -> str:
+        """Create a Track on ``board`` (no commit) — returns the new item id."""
+        from kipy.board_types import Track
+
+        seg = Track()
+        seg.start = _Vector2.from_xy(self._mm_to_nm(start_x), self._mm_to_nm(start_y))
+        seg.end = _Vector2.from_xy(self._mm_to_nm(end_x), self._mm_to_nm(end_y))
+        seg.width = self._mm_to_nm(width)
+        seg.layer = self._layer_enum(layer)  # type: ignore[assignment]  # enum is int at runtime
+        net = self._resolve_net(board, net_code, net_name)
+        if net is not None:
+            seg.net = net
+        created = board.create_items(seg)
+        return self._item_id(created, seg)
 
     def create_via(
         self,
@@ -586,31 +744,39 @@ class IpcBackend:
         if not isinstance(net_code, int):
             raise IpcError("net_code must be an integer")
         try:
-            board = self._kicad.get_board()
-            # Import via class from kipy
-            from kipy.board_types import Via
-
-            # Create via object (kipy stubs may not match runtime)
-            via = Via()
-            via.position = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
-            via.width = self._mm_to_nm(size)  # type: ignore[attr-defined]
-            via.drill = self._mm_to_nm(drill)  # type: ignore[attr-defined]
-            via.net_code = net_code  # type: ignore[attr-defined]
-            # Layer span
-            if hasattr(via, "layer_start") and hasattr(via, "layer_end"):
-                via.layer_start = layers[0]
-                via.layer_end = layers[1]
-
-            # Add to board
-            board.create_items(via)
-
-            # Return UUID for tracking (Via may have 'id' instead of 'uuid')
-            uuid_str = str(via.id) if hasattr(via, "id") else ""
-            return uuid_str
+            with self.commit("MCP: add via") as board:
+                return self._stage_via(board, x, y, size, drill, net_code)
         except IpcError:
             raise
         except Exception as exc:
             raise IpcError(f"Failed to create via: {exc}") from exc
+
+    def _stage_via(
+        self,
+        board: Any,
+        x: float,
+        y: float,
+        size: float,
+        drill: float,
+        net_code: int,
+        net_name: str | None = None,
+    ) -> str:
+        """Create a (through) Via on ``board`` (no commit) — returns the new item id.
+
+        Layer span is left at the padstack default (a standard through via). Blind/
+        buried spans would require building a custom PadStack and are not handled here.
+        """
+        from kipy.board_types import Via
+
+        via = Via()
+        via.position = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
+        via.diameter = self._mm_to_nm(size)
+        via.drill_diameter = self._mm_to_nm(drill)
+        net = self._resolve_net(board, net_code, net_name)
+        if net is not None:
+            via.net = net
+        created = board.create_items(via)
+        return self._item_id(created, via)
 
     def create_zone(
         self,
@@ -678,39 +844,45 @@ class IpcBackend:
         if min_thickness > 10:
             raise IpcError(f"min_thickness too large: {min_thickness}mm (max 10mm)")
         try:
-            board = self._kicad.get_board()
-            # Import zone class from kipy
-            from kipy.board_types import Zone
-
-            # Create zone object (kipy stubs may not match runtime)
-            zone = Zone()
-            zone.net_code = net_code  # type: ignore[attr-defined]
-            if hasattr(zone, "layer"):
-                zone.layer = layer
-            zone.priority = priority
-
-            # Set outline points
-            if hasattr(zone, "outline"):
-                outline = []
-                for x, y in outline_points:
-                    pt = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
-                    outline.append(pt)
-                zone.outline = outline  # type: ignore[assignment]
-
-            # Minimum thickness
-            if hasattr(zone, "min_thickness"):
-                zone.min_thickness = self._mm_to_nm(min_thickness)
-
-            # Add to board
-            board.create_items(zone)
-
-            # Return UUID for tracking (Zone may have 'id' instead of 'uuid')
-            uuid_str = str(zone.id) if hasattr(zone, "id") else ""
-            return uuid_str
+            with self.commit("MCP: add zone") as board:
+                return self._stage_zone(
+                    board, net_code, layer, outline_points, priority, min_thickness
+                )
         except IpcError:
             raise
         except Exception as exc:
             raise IpcError(f"Failed to create zone: {exc}") from exc
+
+    def _stage_zone(
+        self,
+        board: Any,
+        net_code: int,
+        layer: str,
+        outline_points: list[tuple[float, float]],
+        priority: int,
+        min_thickness: float,
+    ) -> str:
+        """Create a copper Zone on ``board`` (no commit) — returns the new item id."""
+        from kipy.board_types import Zone
+        from kipy.geometry import PolygonWithHoles, PolyLineNode
+
+        zone = Zone()
+        net = self._resolve_net(board, net_code)
+        if net is not None:
+            zone.net = net
+        # Zone.layers is a repeated enum container.
+        zone.layers.append(self._layer_enum(layer))  # type: ignore[attr-defined]  # repeated container
+        zone.priority = priority
+        zone.min_thickness = self._mm_to_nm(min_thickness)
+
+        poly = PolygonWithHoles()
+        for x, y in outline_points:
+            poly.outline.append(PolyLineNode.from_xy(self._mm_to_nm(x), self._mm_to_nm(y)))
+        poly.outline.closed = True
+        zone.outline = poly
+
+        created = board.create_items(zone)
+        return self._item_id(created, zone)
 
     def refill_zones(self) -> None:
         """Trigger zone refill (updates copper pours after routing changes).
@@ -734,31 +906,39 @@ class IpcBackend:
         """Get layer stackup information.
 
         Returns:
-            Dict with: layer_count, layers (list of layer info dicts)
+            Dict with ``layer_count`` (copper count), ``copper_layers`` (canonical
+            names, e.g. ['F.Cu', 'B.Cu']), and ``layers`` (full per-layer dicts).
         """
         self.require_connection()
         try:
             board = self._kicad.get_board()
-            layer_count = 2  # Default to 2-layer
 
-            if hasattr(board, "get_copper_layer_count"):
-                layer_count = board.get_copper_layer_count()
-            elif hasattr(board, "copper_layer_count"):
-                layer_count = board.copper_layer_count
-
-            layers = []
-            if hasattr(board, "get_board_stackup"):
-                stackup = board.get_board_stackup()
-                for layer in stackup:
+            copper_layers: list[str] = []
+            layers: list[dict[str, Any]] = []
+            with contextlib.suppress(Exception):
+                for lyr in board.get_stackup().layers:
+                    name = self._layer_name(lyr.layer)
+                    is_copper = getattr(lyr, "material_name", "") == "copper"
                     layers.append(
                         {
-                            "name": str(layer.name) if hasattr(layer, "name") else "",
-                            "type": str(layer.type) if hasattr(layer, "type") else "",
-                            "thickness": layer.thickness if hasattr(layer, "thickness") else 0,
+                            "name": name,
+                            "user_name": getattr(lyr, "user_name", ""),
+                            "thickness": getattr(lyr, "thickness", 0),
+                            "copper": is_copper,
                         }
                     )
+                    if is_copper and name not in copper_layers:
+                        copper_layers.append(name)
 
-            return {"layer_count": layer_count, "layers": layers}
+            layer_count = len(copper_layers)
+            if not layer_count:
+                with contextlib.suppress(Exception):
+                    layer_count = int(board.get_copper_layer_count())
+            return {
+                "layer_count": layer_count or 2,
+                "copper_layers": copper_layers,
+                "layers": layers,
+            }
         except Exception as exc:
             raise IpcError(f"Failed to get board stackup: {exc}") from exc
 
@@ -970,42 +1150,54 @@ class IpcBackend:
             raise IpcError(f"Failed to set visible layers: {exc}") from exc
 
     def move_footprint(self, reference: str, x: float, y: float) -> None:
-        """Move a footprint to a new position in KiCad GUI."""
+        """Move a footprint to a new position in KiCad GUI (atomic commit)."""
         self.require_connection()
         try:
-            board = self._kicad.get_board()
-            fp = self._find_footprint_by_ref(board, reference)
-            fp.position = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
-            board.update_items(fp)
+            with self.commit(f"MCP: move {reference}") as board:
+                self._stage_move(board, reference, x, y)
         except IpcError:
             raise
         except Exception as exc:
             raise IpcError(f"Failed to move {reference}: {exc}") from exc
 
+    def _stage_move(self, board: Any, reference: str, x: float, y: float) -> None:
+        """Move a footprint on ``board`` (no commit)."""
+        fp = self._find_footprint_by_ref(board, reference)
+        fp.position = _Vector2.from_xy(self._mm_to_nm(x), self._mm_to_nm(y))
+        board.update_items(fp)
+
     def rotate_footprint(self, reference: str, angle: float) -> None:
-        """Rotate a footprint in KiCad GUI."""
+        """Rotate a footprint in KiCad GUI (atomic commit)."""
         self.require_connection()
         try:
-            board = self._kicad.get_board()
-            fp = self._find_footprint_by_ref(board, reference)
-            fp.orientation = _Angle.from_degrees(angle)
-            board.update_items(fp)
+            with self.commit(f"MCP: rotate {reference}") as board:
+                self._stage_rotate(board, reference, angle)
         except IpcError:
             raise
         except Exception as exc:
             raise IpcError(f"Failed to rotate {reference}: {exc}") from exc
 
+    def _stage_rotate(self, board: Any, reference: str, angle: float) -> None:
+        """Rotate a footprint on ``board`` (no commit)."""
+        fp = self._find_footprint_by_ref(board, reference)
+        fp.orientation = _Angle.from_degrees(angle)
+        board.update_items(fp)
+
     def delete_footprint(self, reference: str) -> None:
-        """Delete a footprint from the KiCad board."""
+        """Delete a footprint from the KiCad board (atomic commit)."""
         self.require_connection()
         try:
-            board = self._kicad.get_board()
-            fp = self._find_footprint_by_ref(board, reference)
-            board.remove_items(fp)
+            with self.commit(f"MCP: delete {reference}") as board:
+                self._stage_delete(board, reference)
         except IpcError:
             raise
         except Exception as exc:
             raise IpcError(f"Failed to delete {reference}: {exc}") from exc
+
+    def _stage_delete(self, board: Any, reference: str) -> None:
+        """Delete a footprint on ``board`` (no commit)."""
+        fp = self._find_footprint_by_ref(board, reference)
+        board.remove_items(fp)
 
     # ── GUI operations ──────────────────────────────────────────────
 

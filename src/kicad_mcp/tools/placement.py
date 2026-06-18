@@ -378,3 +378,282 @@ register_tool(
     handler=_group_components_handler,
     category="placement",
 )
+
+
+# ── Convenience placement: duplicate / array / align ───────────────
+
+
+def _duplicate_component_handler(
+    session_id: str,
+    reference: str,
+    new_reference: str,
+    x: float,
+    y: float,
+) -> dict[str, Any]:
+    """Duplicate an existing component to a new reference at a new position.
+
+    Args:
+        session_id: Active session ID.
+        reference: Reference designator of the component to copy (e.g., "R1").
+        new_reference: Reference designator for the copy (e.g., "R2").
+        x: X position in mm for the copy.
+        y: Y position in mm for the copy.
+    """
+    ref_result = validate_reference(reference)
+    if not ref_result.valid:
+        return {"error": f"Invalid reference: {ref_result.error}"}
+
+    new_ref_result = validate_reference(new_reference)
+    if not new_ref_result.valid:
+        return {"error": f"Invalid new_reference: {new_ref_result.error}"}
+
+    coord_result = validate_coordinate_pair(x, y, ("x", "y"))
+    if not coord_result.valid:
+        return {"error": f"Invalid coordinates: {coord_result.error}"}
+
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+        record = mgr.apply_duplicate(session, reference, new_reference, x, y)
+        return {"status": "duplicated", "change": record.to_dict()}
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+    except (ValueError, RuntimeError) as exc:
+        return {"error": str(exc)}
+
+
+def _place_component_array_handler(
+    session_id: str,
+    footprint_library: str,
+    value: str,
+    reference_prefix: str,
+    start_number: int,
+    columns: int,
+    rows: int,
+    start_x: float,
+    start_y: float,
+    spacing_x: float,
+    spacing_y: float,
+    layer: str = "F.Cu",
+) -> dict[str, Any]:
+    """Place a grid of identical components in a single operation.
+
+    References are generated as ``{reference_prefix}{start_number + index}``,
+    filling row by row. Each placement is an individually undoable change.
+
+    Args:
+        session_id: Active session ID.
+        footprint_library: Library:Footprint identifier.
+        value: Component value applied to every copy.
+        reference_prefix: Reference letter prefix (e.g., "R").
+        start_number: First reference number (e.g., 1 → R1).
+        columns: Number of columns in the grid.
+        rows: Number of rows in the grid.
+        start_x: X position of the top-left component (mm).
+        start_y: Y position of the top-left component (mm).
+        spacing_x: Horizontal pitch between columns (mm).
+        spacing_y: Vertical pitch between rows (mm).
+        layer: Target layer. Defaults to "F.Cu".
+    """
+    if columns < 1 or rows < 1:
+        return {"error": "columns and rows must each be >= 1"}
+    if columns * rows > 1000:
+        return {"error": "Array too large (max 1000 components)"}
+
+    layer_result = validate_layer_name(layer)
+    if not layer_result.valid:
+        return {"error": f"Invalid layer: {layer_result.error}"}
+
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+
+    placed: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    index = 0
+    for row in range(rows):
+        for col in range(columns):
+            ref = f"{reference_prefix}{start_number + index}"
+            x = start_x + col * spacing_x
+            y = start_y + row * spacing_y
+            index += 1
+            try:
+                record = mgr.apply_place(session, footprint_library, ref, value, x, y, layer)
+                placed.append(record.to_dict())
+            except (ValueError, FileNotFoundError) as exc:
+                errors.append({"reference": ref, "error": str(exc)})
+
+    return {
+        "status": "array_placed",
+        "placed_count": len(placed),
+        "changes": placed,
+        "errors": errors,
+    }
+
+
+_ALIGN_MODES = (
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "center_x",
+    "center_y",
+    "distribute_x",
+    "distribute_y",
+)
+
+
+def _align_components_handler(
+    session_id: str,
+    references: list[str],
+    alignment: str,
+) -> dict[str, Any]:
+    """Align or distribute multiple components.
+
+    Args:
+        session_id: Active session ID.
+        references: Reference designators to align (>= 2).
+        alignment: One of left, right, top, bottom (edge align),
+            center_x, center_y (align to group average), or
+            distribute_x, distribute_y (even spacing between extremes).
+    """
+    if alignment not in _ALIGN_MODES:
+        return {"error": f"Invalid alignment {alignment!r}. Valid: {', '.join(_ALIGN_MODES)}"}
+    if len(references) < 2:
+        return {"error": "Need at least 2 references to align"}
+
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+
+    # Read current positions; skip references that don't exist.
+    positions: dict[str, dict[str, float]] = {}
+    missing: list[str] = []
+    for ref in references:
+        try:
+            positions[ref] = mgr.read_position(session, ref)
+        except (ValueError, RuntimeError):
+            missing.append(ref)
+
+    if len(positions) < 2:
+        return {"error": "Fewer than 2 valid components found", "missing": missing}
+
+    xs = [p["x"] for p in positions.values()]
+    ys = [p["y"] for p in positions.values()]
+
+    # Compute each component's target (x, y).
+    targets: dict[str, tuple[float, float]] = {}
+    if alignment in ("left", "right", "center_x"):
+        tx = (
+            min(xs)
+            if alignment == "left"
+            else max(xs)
+            if alignment == "right"
+            else sum(xs) / len(xs)
+        )
+        for ref, p in positions.items():
+            targets[ref] = (tx, p["y"])
+    elif alignment in ("top", "bottom", "center_y"):
+        ty = (
+            min(ys)
+            if alignment == "top"
+            else max(ys)
+            if alignment == "bottom"
+            else sum(ys) / len(ys)
+        )
+        for ref, p in positions.items():
+            targets[ref] = (p["x"], ty)
+    elif alignment == "distribute_x":
+        ordered = sorted(positions.items(), key=lambda kv: kv[1]["x"])
+        lo, hi = ordered[0][1]["x"], ordered[-1][1]["x"]
+        step = (hi - lo) / (len(ordered) - 1)
+        for i, (ref, p) in enumerate(ordered):
+            targets[ref] = (lo + i * step, p["y"])
+    else:  # distribute_y
+        ordered = sorted(positions.items(), key=lambda kv: kv[1]["y"])
+        lo, hi = ordered[0][1]["y"], ordered[-1][1]["y"]
+        step = (hi - lo) / (len(ordered) - 1)
+        for i, (ref, p) in enumerate(ordered):
+            targets[ref] = (p["x"], lo + i * step)
+
+    moved: list[dict[str, Any]] = []
+    for ref, (tx, ty) in targets.items():
+        cur = positions[ref]
+        if abs(cur["x"] - tx) < 1e-6 and abs(cur["y"] - ty) < 1e-6:
+            continue  # already in place
+        try:
+            record = mgr.apply_move(session, ref, tx, ty)
+            moved.append(record.to_dict())
+        except (ValueError, RuntimeError) as exc:
+            missing.append(f"{ref}: {exc}")
+
+    return {
+        "status": "aligned",
+        "alignment": alignment,
+        "moved_count": len(moved),
+        "changes": moved,
+        "skipped": missing,
+    }
+
+
+register_tool(
+    name="duplicate_component",
+    description="Duplicate an existing component (with all pads/graphics) to a new reference.",
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "reference": {"type": "string", "description": "Component to copy (e.g., 'R1')."},
+        "new_reference": {"type": "string", "description": "Reference for the copy (e.g., 'R2')."},
+        "x": {"type": "number", "description": "X position for the copy (mm)."},
+        "y": {"type": "number", "description": "Y position for the copy (mm)."},
+    },
+    handler=_duplicate_component_handler,
+    category="placement",
+)
+
+register_tool(
+    name="place_component_array",
+    description="Place a grid (rows x columns) of identical components in one operation.",
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "footprint_library": {
+            "type": "string",
+            "description": "Library:Footprint identifier (e.g., 'Resistor_SMD:R_0402_1005Metric').",
+        },
+        "value": {"type": "string", "description": "Component value for every copy."},
+        "reference_prefix": {"type": "string", "description": "Reference prefix (e.g., 'R')."},
+        "start_number": {"type": "integer", "description": "First reference number (e.g., 1)."},
+        "columns": {"type": "integer", "description": "Number of columns."},
+        "rows": {"type": "integer", "description": "Number of rows."},
+        "start_x": {"type": "number", "description": "X of top-left component (mm)."},
+        "start_y": {"type": "number", "description": "Y of top-left component (mm)."},
+        "spacing_x": {"type": "number", "description": "Horizontal pitch (mm)."},
+        "spacing_y": {"type": "number", "description": "Vertical pitch (mm)."},
+        "layer": {"type": "string", "description": "Target layer. Default: 'F.Cu'."},
+    },
+    handler=_place_component_array_handler,
+    category="placement",
+)
+
+register_tool(
+    name="align_components",
+    description=(
+        "Align or distribute components: left/right/top/bottom, center_x/center_y, "
+        "or distribute_x/distribute_y."
+    ),
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "references": {"type": "array", "description": "References to align (>= 2)."},
+        "alignment": {
+            "type": "string",
+            "description": (
+                "left, right, top, bottom, center_x, center_y, distribute_x, or distribute_y."
+            ),
+        },
+    },
+    handler=_align_components_handler,
+    category="placement",
+)

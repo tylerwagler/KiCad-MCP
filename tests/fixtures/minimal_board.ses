@@ -1,0 +1,121 @@
+(session minimal
+  (base_design minimal)
+  (placement
+    (resolution um 10)
+    (component R1
+      (place R1 1000000 -1000000 front 0)
+    )
+    (component C1
+      (place C1 2000000 -1000000 front 0)
+    )
+    (component U1
+      (place U1 3000000 -1000000 front 0)
+    )
+  )
+  (was_is
+  )
+  (routes 
+    (resolution um 10)
+    (parser
+      (host_cad "KiCad-MCP")
+      (host_version "1.0")
+    )
+    (library_out 
+      (padstack "Via_default"
+        (shape
+          (circle F.Cu 80000 0 0)
+        )
+        (shape
+          (circle B.Cu 80000 0 0)
+        )
+        (attach off)
+      )
+      (padstack "Via_default"
+        (shape
+          (circle F.Cu 80000 0 0)
+        )
+        (shape
+          (circle B.Cu 80000 0 0)
+        )
+        (attach off)
+      )
+    )
+    (network_out 
+      (net VCC
+        (wire
+          (path F.Cu 25000
+            950000 -1000000
+            950000 -942483
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            1900000 -1000000
+            1817483 -1000000
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            1817483 -1000000
+            1759966 -942483
+            950000 -942483
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            1900000 -1000000
+            1982517 -1000000
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            2730000 -809500
+            2121444 -809500
+            1982517 -948427
+            1982517 -1000000
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            3270000 -809500
+            2730000 -809500
+          )
+        )
+      )
+      (net GND
+        (wire
+          (path F.Cu 25000
+            2182517 -1105308
+            2182517 -1000000
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            2730000 -1190500
+            2267709 -1190500
+            2182517 -1105308
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            2182517 -1105308
+            1097791 -1105308
+            1050000 -1057517
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            1050000 -1000000
+            1050000 -1057517
+          )
+        )
+        (wire
+          (path F.Cu 25000
+            2100000 -1000000
+            2182517 -1000000
+          )
+        )
+      )
+    )
+  )
+)

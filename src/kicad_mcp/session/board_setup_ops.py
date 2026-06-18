@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 
-from ..constants import BOARD_OUTLINE_STROKE_WIDTH
 from ..sexp.parser import parse as sexp_parse
 from .helpers import find_footprint
 from .types import (

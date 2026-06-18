@@ -88,6 +88,8 @@ def _make_mock_track(
     net_name: str = "GND",
 ) -> MagicMock:
     """Create a mock kipy TrackSegment."""
+    from kipy.util.board_layer import layer_from_canonical_name
+
     track = MagicMock()
     track.start = MagicMock()
     track.start.x = int(start_x * 1_000_000)
@@ -96,11 +98,11 @@ def _make_mock_track(
     track.end.x = int(end_x * 1_000_000)
     track.end.y = int(end_y * 1_000_000)
     track.width = int(width * 1_000_000)
-    track.layer = layer
-    track.net_code = net_code
+    track.layer = layer_from_canonical_name(layer)  # enum int, as kipy returns
     track.net = MagicMock()
     track.net.name = net_name
-    track.uuid = f"track-{net_code}"
+    track.net.code = net_code
+    track.id = f"track-{net_code}"
     return track
 
 
@@ -115,18 +117,23 @@ def _make_mock_via(
     net_name: str = "GND",
 ) -> MagicMock:
     """Create a mock kipy Via."""
+    from kipy.util.board_layer import layer_from_canonical_name
+
     via = MagicMock()
     via.position = MagicMock()
     via.position.x = int(x * 1_000_000)
     via.position.y = int(y * 1_000_000)
-    via.width = int(size * 1_000_000)
-    via.drill = int(drill * 1_000_000)
-    via.layer_start = layer_start
-    via.layer_end = layer_end
-    via.net_code = net_code
+    via.diameter = int(size * 1_000_000)
+    via.drill_diameter = int(drill * 1_000_000)
+    via.padstack = MagicMock()
+    via.padstack.layers = [
+        layer_from_canonical_name(layer_start),
+        layer_from_canonical_name(layer_end),
+    ]
     via.net = MagicMock()
     via.net.name = net_name
-    via.uuid = f"via-{net_code}"
+    via.net.code = net_code
+    via.id = f"via-{net_code}"
     return via
 
 
@@ -139,25 +146,26 @@ def _make_mock_zone(
     outline_points: list[tuple[float, float]] | None = None,
 ) -> MagicMock:
     """Create a mock kipy Zone."""
+    from kipy.util.board_layer import layer_from_canonical_name
+
     zone = MagicMock()
-    zone.net_code = net_code
     zone.net = MagicMock()
     zone.net.name = net_name
-    zone.layer = layer
-    zone.is_filled = filled
+    zone.net.code = net_code
+    zone.layers = [layer_from_canonical_name(layer)]
+    zone.filled = filled
     zone.priority = priority
-    # Outline points
-    if outline_points:
-        outline = []
-        for x, y in outline_points:
-            pt = MagicMock()
-            pt.x = int(x * 1_000_000)
-            pt.y = int(y * 1_000_000)
-            outline.append(pt)
-        zone.outline = outline
-    else:
-        zone.outline = []
-    zone.uuid = f"zone-{net_code}"
+    zone.id = f"zone-{net_code}"
+    # Outline lives at zone.outline.outline.nodes, each node carrying a .point.
+    nodes = []
+    for x, y in outline_points or []:
+        node = MagicMock()
+        node.has_point = True
+        node.point = MagicMock()
+        node.point.x = int(x * 1_000_000)
+        node.point.y = int(y * 1_000_000)
+        nodes.append(node)
+    zone.outline.outline.nodes = nodes
     return zone
 
 
@@ -599,36 +607,24 @@ class TestIpcOperations:
             mock_vec.from_xy.assert_called_once()
 
     def test_create_zone(self) -> None:
-        """Create a zone on the board."""
+        """Create a zone on the board (atomic commit, real kipy Zone geometry)."""
+        from kipy.util.board_layer import layer_from_canonical_name
+
         board = _make_mock_board()
-        board.create_items = MagicMock()
+        board.create_items = MagicMock(return_value=[])
+        board.get_nets = MagicMock(return_value=[])  # net resolution finds nothing
         ipc, _ = self._connect_with_mock(board)
 
-        class SimpleZone:
-            """Simplified Zone mock that doesn't call protobuf CopyFrom."""
+        points = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        uuid = ipc.create_zone(1, "F.Cu", points, priority=0, min_thickness=0.25)
 
-            def __init__(self):
-                self.net_code = None
-                self.layer = None
-                self.priority = None
-                self.outline = []
-                self.min_thickness = None
-                self.id = "zone-uuid-789"
-                self.uuid = "zone-uuid-789"
-
-        with (
-            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
-            patch("kipy.board_types.Zone", SimpleZone),
-        ):
-            mock_vec.from_xy.return_value = MagicMock()
-
-            points = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
-            uuid = ipc.create_zone(1, "F.Cu", points, priority=0, min_thickness=0.25)
-
-            assert uuid == "zone-uuid-789"
-            board.create_items.assert_called_once()
-            # Should convert 4 points
-            assert mock_vec.from_xy.call_count == 4
+        assert isinstance(uuid, str)
+        board.create_items.assert_called_once()
+        # The staged item is a real kipy Zone with the closed outline + layer set.
+        zone = board.create_items.call_args[0][0]
+        assert layer_from_canonical_name("F.Cu") in list(zone.layers)
+        assert len(zone.outline.outline.nodes) == 4
+        assert zone.outline.outline.closed is True
 
     def test_refill_zones(self) -> None:
         """Refill zones on the board."""
@@ -1117,36 +1113,19 @@ class TestIpcToolHandlers:
 
         ipc = IpcBackend.get()
         board = _make_mock_board()
-        board.create_items = MagicMock()
+        board.create_items = MagicMock(return_value=[])
+        board.get_nets = MagicMock(return_value=[])  # net resolution finds nothing
         ipc._kicad = _make_mock_kicad(board)
         ipc._connected = True
 
-        class SimpleZone:
-            """Simplified Zone mock that doesn't call protobuf CopyFrom."""
+        result = _ipc_create_zone_handler(
+            1, "F.Cu", "[[0, 0], [10, 0], [10, 10], [0, 10]]", 0, 0.25
+        )
 
-            def __init__(self):
-                self.net_code = None
-                self.layer = None
-                self.priority = None
-                self.outline = []
-                self.min_thickness = None
-                self.id = "zone-789"
-                self.uuid = "zone-789"
-
-        with (
-            patch("kicad_mcp.backends.ipc_api._Vector2") as mock_vec,
-            patch("kipy.board_types.Zone", SimpleZone),
-        ):
-            mock_vec.from_xy.return_value = MagicMock()
-
-            result = _ipc_create_zone_handler(
-                1, "F.Cu", "[[0, 0], [10, 0], [10, 10], [0, 10]]", 0, 0.25
-            )
-
-            assert result["status"] == "created"
-            assert result["type"] == "zone"
-            assert result["uuid"] == "zone-789"
-            board.create_items.assert_called_once()
+        assert result["status"] == "created"
+        assert result["type"] == "zone"
+        assert isinstance(result["uuid"], str)
+        board.create_items.assert_called_once()
 
     def test_create_zone_tool_invalid_points(self) -> None:
         from kicad_mcp.tools.ipc_sync import _ipc_create_zone_handler
@@ -1763,3 +1742,140 @@ class TestToolRegistration:
         cats = get_categories()
         assert "ipc_sync" in cats
         assert len(cats["ipc_sync"]) == 24  # Phase 1: 10, Phase 2: +4, Phase 3: +10
+
+
+class TestKipyWriteApi:
+    """Phase 1: atomic commits + real-kipy-object staging (exercises real kipy)."""
+
+    @staticmethod
+    def _real_net(name: str):
+        import kipy.board_types as bt
+
+        n = bt.Net()
+        n.proto.name = name
+        return n
+
+    def _fake_board(self, nets=None):
+        """A minimal board recording commit lifecycle + created/updated items."""
+        created: list = []
+
+        class _Board:
+            def __init__(self) -> None:
+                self.created = created
+                self.commits: list = []
+                self.pushed: list = []
+                self.dropped: list = []
+
+            def get_nets(self):
+                return nets or []
+
+            def begin_commit(self):
+                c = object()
+                self.commits.append(c)
+                return c
+
+            def push_commit(self, c, message=""):
+                self.pushed.append((c, message))
+
+            def drop_commit(self, c):
+                self.dropped.append(c)
+
+            def create_items(self, item):
+                created.append(item)
+                return [item]
+
+            def update_items(self, item):
+                return [item]
+
+            def remove_items(self, item):
+                pass
+
+        return _Board()
+
+    def _connected(self, board):
+        ipc = IpcBackend()
+        ipc._kicad = MagicMock()
+        ipc._kicad.get_board.return_value = board
+        ipc._connected = True
+        return ipc
+
+    def test_commit_pushes_on_success(self) -> None:
+        board = self._fake_board()
+        ipc = self._connected(board)
+        with ipc.commit("msg") as b:
+            assert b is board
+        assert len(board.pushed) == 1
+        assert board.pushed[0][1] == "msg"
+        assert not board.dropped
+
+    def test_commit_drops_on_error(self) -> None:
+        board = self._fake_board()
+        ipc = self._connected(board)
+        with pytest.raises(ValueError, match="boom"), ipc.commit("msg"):
+            raise ValueError("boom")
+        assert len(board.dropped) == 1
+        assert not board.pushed
+
+    def test_stage_track_builds_real_object(self) -> None:
+        from kipy.util.board_layer import layer_from_canonical_name
+
+        board = self._fake_board(nets=[self._real_net("VCC")])
+        ipc = self._connected(board)
+        ipc._stage_track(board, 1.0, 2.0, 3.0, 4.0, 0.25, "F.Cu", 0, net_name="VCC")
+        track = board.created[-1]
+        assert track.layer == layer_from_canonical_name("F.Cu")
+        assert track.net.name == "VCC"
+        assert track.width == ipc._mm_to_nm(0.25)
+        assert track.start.x == ipc._mm_to_nm(1.0)
+
+    def test_stage_via_builds_real_object(self) -> None:
+        board = self._fake_board(nets=[self._real_net("GND")])
+        ipc = self._connected(board)
+        ipc._stage_via(board, 5.0, 6.0, 0.8, 0.4, 0, net_name="GND")
+        via = board.created[-1]
+        assert via.diameter == ipc._mm_to_nm(0.8)
+        assert via.drill_diameter == ipc._mm_to_nm(0.4)
+        assert via.net.name == "GND"
+
+    def test_stage_zone_builds_closed_outline(self) -> None:
+        from kipy.util.board_layer import layer_from_canonical_name
+
+        board = self._fake_board()
+        ipc = self._connected(board)
+        ipc._stage_zone(board, 0, "F.Cu", [(0, 0), (10, 0), (10, 10), (0, 10)], 0, 0.25)
+        zone = board.created[-1]
+        assert layer_from_canonical_name("F.Cu") in list(zone.layers)
+        assert len(zone.outline.outline.nodes) == 4
+        assert zone.outline.outline.closed is True
+
+    def test_resolve_net_prefers_name(self) -> None:
+        nets = [self._real_net("VCC"), self._real_net("GND")]
+        board = self._fake_board(nets=nets)
+        got = IpcBackend._resolve_net(board, net_code=999, net_name="GND")
+        assert got is not None and got.name == "GND"
+
+    def test_resolve_net_none_when_unmatched(self) -> None:
+        board = self._fake_board(nets=[self._real_net("VCC")])
+        assert IpcBackend._resolve_net(board, net_code=0, net_name=None) is None
+
+    def test_move_footprint_uses_atomic_commit(self) -> None:
+        board = self._fake_board()
+        fp = MagicMock()
+        board_fps = [fp]
+        fp_ref = MagicMock()
+        fp_ref.text.value = "U1"
+        fp.reference_field = fp_ref
+        board.get_footprints = lambda: board_fps  # type: ignore[attr-defined]
+        ipc = self._connected(board)
+        ipc.move_footprint("U1", 10.0, 20.0)
+        assert len(board.pushed) == 1  # one undo step
+
+    def test_version_info_shape(self) -> None:
+        ipc = IpcBackend()
+        info = ipc.version_info()
+        assert set(info) == {
+            "connected",
+            "kicad_version",
+            "version_compatible",
+            "kipy_available",
+        }

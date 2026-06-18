@@ -52,11 +52,11 @@ class Document:
         try:
             raw_text = path.read_text(encoding="utf-8")
         except PermissionError as e:
-            raise IOError(f"Permission denied reading {path}: {e}") from e
+            raise OSError(f"Permission denied reading {path}: {e}") from e
         except UnicodeDecodeError as e:
             raise ValueError(f"Invalid encoding in {path}: {e}") from e
         except OSError as e:
-            raise IOError(f"Error reading {path}: {e}") from e
+            raise OSError(f"Error reading {path}: {e}") from e
 
         try:
             root = parse(raw_text)
@@ -90,9 +90,9 @@ class Document:
         try:
             target.write_text(text, encoding="utf-8")
         except PermissionError as e:
-            raise IOError(f"Permission denied writing to {target}: {e}") from e
+            raise OSError(f"Permission denied writing to {target}: {e}") from e
         except OSError as e:
-            raise IOError(f"Error writing to {target}: {e}") from e
+            raise OSError(f"Error writing to {target}: {e}") from e
 
         return target
 

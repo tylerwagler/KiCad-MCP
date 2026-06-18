@@ -44,6 +44,8 @@ EXPORT_EXTENSIONS = frozenset(
         ".glb",
         ".brep",
         ".xao",
+        ".dsn",
+        ".ses",
     }
 )
 
@@ -161,6 +163,14 @@ class PathValidator:
             SecurityError: If the path fails validation.
         """
         return self._validate(path, must_exist=True, extensions=KICAD_EXTENSIONS)
+
+    def validate_import(self, path: str | Path) -> Path:
+        """Validate an existing non-KiCad input file (e.g. a Specctra .ses/.dsn).
+
+        Like :meth:`validate_input` but accepts the broader interchange/export
+        extension set instead of only native KiCad files.
+        """
+        return self._validate(path, must_exist=True, extensions=self.allowed_extensions)
 
     def validate_output(self, path: str | Path) -> Path:
         """Validate an output file path (parent must exist).
@@ -484,27 +494,22 @@ class SecureSubprocess:
         if ".." in path:
             raise SecurityError(f"Path traversal detected: {path}")
 
-        # Allow absolute paths that end with KiCad extensions AND look like legitimate paths
-        # These are acceptable when passed to kicad-cli which handles path resolution
-        kiCad_extensions = (
-            ".kicad_pcb",
-            ".kicad_sch",
-            ".kicad_mod",
-            ".kicad_pro",
-            ".kicad_sym",
-            ".kicad_wks",
-            ".kicad_dru",
-            ".kicad_sym",
-        )
+        # Allow absolute paths that end with a known KiCad input OR export-output
+        # extension AND look like legitimate paths. Export outputs (.svg, .pdf,
+        # .step, .pos, …) are routinely absolute when passed to kicad-cli, which
+        # handles path resolution itself.
+        allowed_path_extensions = ALL_ALLOWED_EXTENSIONS
 
-        # Only allow absolute paths with KiCad extensions if they don't look suspicious
-        # A legitimate KiCad file path should have a directory component with valid characters
-        if path.startswith(("/", "~")) and any(path.endswith(ext) for ext in kiCad_extensions):
+        # Only allow absolute paths with known extensions if they don't look suspicious.
+        # A legitimate path should have a directory component with valid characters.
+        if path.startswith(("/", "~")) and any(
+            path.endswith(ext) for ext in allowed_path_extensions
+        ):
             # Reject paths that try to masquerade as KiCad files (e.g., /etc/passwd.kicad_pcb)
             # by checking the directory part doesn't look suspicious
             if self._looks_like_suspicious_path(path):
                 raise SecurityError(f"Absolute paths not allowed: {path}")
-            return  # Allow known KiCad file paths
+            return  # Allow known KiCad / export file paths
 
         # Reject absolute paths that don't match KiCad extension patterns
         # Note: Relative paths are always allowed - this is safer for subprocess calls
@@ -564,6 +569,12 @@ class SecureSubprocess:
         # Whitespace-only is suspicious
         if value.strip() != value:
             return False
+
+        # Comma-separated lists (e.g. a --layers value like "F.Cu,B.Cu,Edge.Cuts").
+        # Every element must independently be a safe literal.
+        if "," in value:
+            parts = value.split(",")
+            return all(part != "" and self._is_safe_literal(part) for part in parts)
 
         # Layer names (KiCad style)
         if value.replace(".", "").replace("_", "").replace(" ", "").isalnum():

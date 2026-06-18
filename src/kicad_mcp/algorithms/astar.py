@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import heapq
 import math
-
-from ..constants import MAX_ITERATIONS_DEFAULT, DEFAULT_VIA_COST
 from typing import Any
 
+from ..constants import DEFAULT_VIA_COST, MAX_ITERATIONS_DEFAULT
 from .grid import ObstacleMap
 from .types import BatchRouteResult, RouteResult, Waypoint
 

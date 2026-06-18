@@ -13,9 +13,10 @@ import threading
 import uuid
 from typing import Any
 
-from ..sexp import Document
-from ..sexp.parser import parse as sexp_parse, parse_all as sexp_parse_all
 from ..exceptions import ResourceNotFoundError
+from ..sexp import Document
+from ..sexp.parser import parse as sexp_parse
+from ..sexp.parser import parse_all as sexp_parse_all
 from . import board_setup_ops, ipc_ops, net_zone_ops, placement_ops, routing_ops
 from .helpers import deep_copy_doc, find_footprint, find_footprint_by_uuid
 from .types import ChangeRecord, Session, SessionState, require_active
@@ -125,6 +126,19 @@ class SessionManager:
         return placement_ops.place_from_kicad_mod(
             session, kicad_mod_path, reference, value, x, y, layer
         )
+
+    def read_position(self, session: Session, reference: str) -> dict[str, float]:
+        return placement_ops.read_position(session, reference)
+
+    def apply_duplicate(
+        self,
+        session: Session,
+        reference: str,
+        new_reference: str,
+        x: float,
+        y: float,
+    ) -> ChangeRecord:
+        return placement_ops.apply_duplicate(session, reference, new_reference, x, y)
 
     # ── Net/Zone delegates ─────────────────────────────────────────
 
@@ -474,7 +488,17 @@ class SessionManager:
                 session.state = SessionState.COMMITTED
                 return {"status": "committed", "changes_written": 0}
 
-        ipc_pushed = ipc_ops.try_ipc_push(applied)
+        # Map net numbers → names from the working doc so the IPC push binds nets
+        # by name (net codes are deprecated in KiCad 10).
+        net_names: dict[int, str] = {}
+        try:
+            from ..schema.extract import extract_nets
+
+            net_names = {n.number: n.name for n in extract_nets(session._working_doc)}
+        except Exception:  # noqa: BLE001 — net mapping is best-effort
+            net_names = {}
+
+        ipc_pushed = ipc_ops.try_ipc_push(applied, net_names)
 
         session._working_doc.save()
         session._original_doc.root = session._working_doc.root
