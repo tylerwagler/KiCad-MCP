@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import math
 import re
 import uuid as _uuid
+from pathlib import Path
 from typing import Any
 
-from ..sexp.parser import _quote_if_needed, parse as sexp_parse
+from ..library import _kicad_env_paths, _parse_lib_table, discover_lib_tables
+from ..sexp import Document
+from ..sexp.parser import SExp, _quote_if_needed
+from ..sexp.parser import parse as sexp_parse
 from .registry import register_tool
+
+# pin number -> (x, y, angle, length) in the symbol's local frame (mm, +Y up)
+PinGeom = dict[str, tuple[float, float, float, float]]
 
 
 def _validate_net_name(name: str) -> None:
@@ -121,7 +129,263 @@ def _find_symbol_handler(reference: str) -> dict[str, Any]:
     matches = [s for s in symbols if s.reference == reference]
     if not matches:
         return {"found": False, "message": f"No symbol with reference '{reference}'"}
-    return {"found": True, "symbol": matches[0].to_dict()}
+
+    result: dict[str, Any] = {"found": True, "symbol": matches[0].to_dict()}
+    # Include absolute pin coordinates so callers can land wires/labels on pins.
+    doc = schematic_state.get_document()
+    node = _find_instance_node(doc, reference)
+    if node is not None:
+        lib_id_node = node.get("lib_id")
+        geo = _embedded_pin_geometry(doc, lib_id_node.first_value if lib_id_node else None)
+        if geo:
+            result["pins"] = _instance_pin_positions(doc, node, geo)
+    return result
+
+
+def _get_pin_position_handler(reference: str, pin: str) -> dict[str, Any]:
+    """Compute the absolute schematic coordinate (mm) of a symbol's pin.
+
+    Use this to land a wire or net label exactly on a pin so the net connects.
+
+    Args:
+        reference: Reference designator of the placed symbol (e.g., "U1").
+        pin: Pin number (e.g., "1", "8").
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    node = _find_instance_node(doc, reference)
+    if node is None:
+        return {"error": f"Symbol '{reference}' not found"}
+
+    lib_id_node = node.get("lib_id")
+    geo = _embedded_pin_geometry(doc, lib_id_node.first_value if lib_id_node else None)
+    pin = str(pin)
+    if not geo or pin not in geo:
+        return {
+            "error": f"Pin {pin!r} not found on {reference}",
+            "available_pins": sorted(geo) if geo else [],
+        }
+
+    positions = {p["pin"]: p for p in _instance_pin_positions(doc, node, geo)}
+    p = positions[pin]
+    return {"reference": reference, "pin": pin, "x": p["x"], "y": p["y"]}
+
+
+def _resolve_symbol_lib_path(lib_name: str, project_dir: Path) -> Path | None:
+    """Resolve a symbol-library name to its .kicad_sym path.
+
+    Checks the project sym-lib-table first (so ${KIPRJMOD} libraries like the
+    project's own library resolve), then the global/user sym-lib-table.
+    """
+    proj_table = project_dir / "sym-lib-table"
+    if proj_table.exists():
+        env = _kicad_env_paths()
+        env["KIPRJMOD"] = project_dir
+        for entry in _parse_lib_table(proj_table, env):
+            if entry.name == lib_name and Path(entry.uri).exists():
+                return Path(entry.uri)
+    for entry in discover_lib_tables().get("symbol_libraries", []):
+        if entry.name == lib_name and Path(entry.uri).exists():
+            return Path(entry.uri)
+    return None
+
+
+def _load_lib_symbol_node(lib_path: Path, sym_name: str) -> SExp | None:
+    """Return the top-level (symbol "<name>" ...) node from a .kicad_sym, or None."""
+    try:
+        doc = Document.load(str(lib_path))
+    except (OSError, ValueError):
+        return None
+    for sym in doc.root.find_all("symbol"):
+        if sym.first_value == sym_name:
+            return sym
+    return None
+
+
+def _symbol_pin_numbers(sym_node: SExp) -> list[str]:
+    """Collect pin numbers from a lib symbol's unit sub-symbols, in document order."""
+    numbers: list[str] = []
+    for unit in sym_node.find_all("symbol"):  # child unit sub-symbols (Name_x_y)
+        for pin in unit.find_all("pin"):
+            num = pin.get("number")
+            if num is not None and num.first_value:
+                numbers.append(num.first_value)
+    return numbers
+
+
+def _symbol_pin_geometry(sym_node: SExp) -> PinGeom:
+    """Map pin number -> (x, y, angle, length) in the symbol's local frame.
+
+    Coordinates are in mm with the library convention (+Y up). The pin's ``at`` is
+    its connection point (where wires/labels attach); ``length`` is the graphic
+    line length and is not part of the connection point.
+    """
+    geo: dict[str, tuple[float, float, float, float]] = {}
+    for unit in sym_node.find_all("symbol"):
+        for pin in unit.find_all("pin"):
+            num = pin.get("number")
+            at = pin.get("at")
+            if num is None or not num.first_value or at is None:
+                continue
+            av = at.atom_values
+            try:
+                px = float(av[0])
+                py = float(av[1])
+                pa = float(av[2]) if len(av) > 2 else 0.0
+            except (ValueError, IndexError):
+                continue
+            length = pin.get("length")
+            ln = 0.0
+            if length is not None and length.first_value:
+                try:
+                    ln = float(length.first_value)
+                except ValueError:
+                    ln = 0.0
+            geo[num.first_value] = (px, py, pa, ln)
+    return geo
+
+
+def _symbol_property_value(sym_node: SExp, name: str) -> str | None:
+    """Return a lib symbol's ``(property "<name>" "<value>" ...)`` value, or None."""
+    for prop in sym_node.find_all("property"):
+        if prop.first_value == name:
+            vals = prop.atom_values
+            return vals[1] if len(vals) > 1 else ""
+    return None
+
+
+def _transform_pin(
+    px: float, py: float, ox: float, oy: float, angle: float, mirror: str | None
+) -> tuple[float, float]:
+    """Map a symbol-local pin (mm, +Y up) to absolute schematic coords (mm, +Y down).
+
+    Applies mirror, then the instance rotation (CCW in library space), then the
+    library->schematic Y-flip, then translates by the instance origin. The
+    schematic Y axis points down, so library +Y becomes schematic -Y.
+    """
+    x, y = px, py
+    if mirror == "x":  # mirror across the X axis
+        y = -y
+    elif mirror == "y":  # mirror across the Y axis
+        x = -x
+    a = round(angle) % 360
+    if a == 90:
+        x, y = -y, x
+    elif a == 180:
+        x, y = -x, -y
+    elif a == 270:
+        x, y = y, -x
+    elif a != 0:
+        rad = math.radians(angle)
+        c, s = math.cos(rad), math.sin(rad)
+        x, y = x * c - y * s, x * s + y * c
+    return (ox + x, oy - y)
+
+
+def _resolve_lib_symbol(doc: Document, lib_id: str) -> dict[str, Any] | None:
+    """Resolve a lib_id to its real symbol and embed it into the schematic.
+
+    Returns ``{"pins", "geometry", "footprint"}`` (pin numbers in order, per-pin
+    local geometry, and the symbol's Footprint property), or None when the symbol
+    cannot be resolved (caller falls back to a 2-pin stub for unknown libraries).
+    """
+    if ":" not in lib_id or doc.path is None:
+        return None
+    lib_name, sym_name = lib_id.split(":", 1)
+    project_dir = Path(doc.path).resolve().parent
+    lib_path = _resolve_symbol_lib_path(lib_name, project_dir)
+    if lib_path is None:
+        return None
+    sym_node = _load_lib_symbol_node(lib_path, sym_name)
+    if sym_node is None:
+        return None
+
+    result = {
+        "pins": _symbol_pin_numbers(sym_node),
+        "geometry": _symbol_pin_geometry(sym_node),
+        "footprint": _symbol_property_value(sym_node, "Footprint") or "",
+    }
+
+    lib_symbols = doc.root.find("lib_symbols")
+    if lib_symbols is None:
+        lib_symbols = sexp_parse("(lib_symbols)")
+        # place after the (paper)/(generator) header, before the first symbol
+        idx = next(
+            (i for i, c in enumerate(doc.root.children) if c.name == "symbol"),
+            len(doc.root.children),
+        )
+        doc.root.children.insert(idx, lib_symbols)
+
+    already = any(c.name == "symbol" and c.first_value == lib_id for c in lib_symbols.children)
+    if not already:
+        embedded = sym_node.deep_copy()
+        # KiCad names the embedded top-level symbol "lib:Name"; units keep bare names.
+        if embedded.children and embedded.children[0].is_atom:
+            embedded.children[0].value = lib_id
+            # deep_copy kept the atom's ORIGINAL quoted text, which to_string()
+            # would re-emit verbatim — losing the rename. Force the quoted new value
+            # (lib_id is validated to safe chars, so no escaping is needed) to match
+            # KiCad's canonical "lib:Name" form.
+            embedded.children[0]._original_str = f'"{lib_id}"'
+        lib_symbols.children.append(embedded)
+    return result
+
+
+def _find_instance_node(doc: Document, reference: str) -> SExp | None:
+    """Find a placed symbol instance node by reference designator, or None."""
+    for sym_node in doc.root.find_all("symbol"):
+        if sym_node.get("lib_id") is None:
+            continue
+        for prop in sym_node.find_all("property"):
+            if prop.first_value == "Reference":
+                vals = prop.atom_values
+                if len(vals) > 1 and vals[1] == reference:
+                    return sym_node
+    return None
+
+
+def _embedded_pin_geometry(doc: Document, lib_id: str | None) -> PinGeom | None:
+    """Pin geometry for a lib_id, preferring the schematic's own embedded symbol.
+
+    Falls back to re-resolving the external library if not embedded.
+    """
+    if not lib_id:
+        return None
+    lib_symbols = doc.root.find("lib_symbols")
+    if lib_symbols is not None:
+        for child in lib_symbols.children:
+            if child.name == "symbol" and child.first_value == lib_id:
+                return _symbol_pin_geometry(child)
+    if ":" in lib_id and doc.path is not None:
+        lib_name, sym_name = lib_id.split(":", 1)
+        lib_path = _resolve_symbol_lib_path(lib_name, Path(doc.path).resolve().parent)
+        if lib_path is not None:
+            sym_node = _load_lib_symbol_node(lib_path, sym_name)
+            if sym_node is not None:
+                return _symbol_pin_geometry(sym_node)
+    return None
+
+
+def _instance_pin_positions(
+    doc: Document, sym_node: SExp, geometry: PinGeom
+) -> list[dict[str, Any]]:
+    """Absolute schematic coords (mm) for every pin of a placed instance."""
+    at = sym_node.get("at")
+    av = at.atom_values if at else []
+    try:
+        ox = float(av[0])
+        oy = float(av[1])
+        angle = float(av[2]) if len(av) > 2 else 0.0
+    except (ValueError, IndexError):
+        return []
+    mirror_node = sym_node.get("mirror")
+    mirror = mirror_node.first_value if mirror_node else None
+    out: list[dict[str, Any]] = []
+    for num, (px, py, _pa, _ln) in geometry.items():
+        sx, sy = _transform_pin(px, py, ox, oy, angle, mirror)
+        out.append({"pin": num, "x": round(sx, 4), "y": round(sy, 4)})
+    return out
 
 
 def _add_symbol_handler(
@@ -159,13 +423,41 @@ def _add_symbol_handler(
         return {"error": f"Symbol with reference '{reference}' already exists"}
 
     sym_uuid = str(_uuid.uuid4())
-    pin1_uuid = str(_uuid.uuid4())
-    pin2_uuid = str(_uuid.uuid4())
+
+    # Resolve the real library symbol: embed its definition into (lib_symbols),
+    # emit one instance pin per actual pin, and carry over its footprint. Previously
+    # this was hard-coded to a 2-pin stub with an empty (lib_symbols) and no
+    # footprint, which produced broken symbols that did not net out to a PCB.
+    resolved = _resolve_lib_symbol(doc, lib_id)
+    if resolved and resolved["pins"]:
+        pin_numbers = resolved["pins"]
+        footprint = resolved["footprint"]
+        geometry = resolved["geometry"]
+    else:
+        # Fallback for an unresolvable symbol: keep the legacy 2-pin stub.
+        pin_numbers = ["1", "2"]
+        footprint = ""
+        geometry = {}
+
+    pins_text = " ".join(f'(pin "{n}" (uuid "{_uuid.uuid4()}"))' for n in pin_numbers)
 
     # quote_if_needed escapes special characters like quotes and backslashes
     quoted_lib_id = _quote_if_needed(lib_id)
     quoted_reference = _quote_if_needed(reference)
     quoted_value = _quote_if_needed(value)
+    quoted_footprint = _quote_if_needed(footprint)
+
+    # The reference designator only resolves in v20231120+ schematics when the
+    # instance carries an (instances (project ...(path ...(reference ...)))) block
+    # keyed on the schematic's top-level UUID.
+    root_uuid_node = doc.root.get("uuid")
+    root_uuid = root_uuid_node.first_value if root_uuid_node else str(_uuid.uuid4())
+    project_name = Path(doc.path).stem if doc.path else "noname"
+    instances_text = (
+        f"(instances (project {_quote_if_needed(project_name)}"
+        f' (path "/{root_uuid}"'
+        f" (reference {quoted_reference}) (unit {unit}))))"
+    )
 
     sym_text = (
         f"(symbol (lib_id {quoted_lib_id}) (at {x} {y} {angle}) (unit {unit})"
@@ -175,12 +467,11 @@ def _add_symbol_handler(
         f" (effects (font (size 1.27 1.27))))"
         f' (property "Value" {quoted_value} (at {x} {y + 2.54} 0)'
         f" (effects (font (size 1.27 1.27))))"
-        f' (property "Footprint" "" (at {x} {y} 0)'
+        f' (property "Footprint" {quoted_footprint} (at {x} {y} 0)'
         f" (effects (font (size 1.27 1.27)) hide))"
         f' (property "Datasheet" "~" (at {x} {y} 0)'
         f" (effects (font (size 1.27 1.27)) hide))"
-        f' (pin "1" (uuid "{pin1_uuid}"))'
-        f' (pin "2" (uuid "{pin2_uuid}")))'
+        f" {pins_text} {instances_text})"
     )
     sym_node = sexp_parse(sym_text)
 
@@ -195,11 +486,18 @@ def _add_symbol_handler(
     # Refresh state
     schematic_state.refresh()
 
+    # Absolute schematic coords of each pin (for landing wires/labels).
+    pin_positions = _instance_pin_positions(doc, sym_node, geometry)
+
     return {
         "status": "added",
         "reference": reference,
         "uuid": sym_uuid,
         "position": {"x": x, "y": y},
+        "pin_count": len(pin_numbers),
+        "resolved": bool(resolved and resolved["pins"]),
+        "footprint": footprint,
+        "pins": pin_positions,
     }
 
 
@@ -378,6 +676,20 @@ register_tool(
         },
     },
     handler=_find_symbol_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="get_pin_position",
+    description=(
+        "Get the absolute schematic coordinate (mm) of a placed symbol's pin, so a "
+        "wire or net label can be landed on it for connectivity."
+    ),
+    parameters={
+        "reference": {"type": "string", "description": "Reference designator (e.g., 'U1')."},
+        "pin": {"type": "string", "description": "Pin number (e.g., '1')."},
+    },
+    handler=_get_pin_position_handler,
     category="schematic",
 )
 

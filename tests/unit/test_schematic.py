@@ -210,3 +210,52 @@ class TestSchematicMutation:
             lib_id="Device:R", reference=ref, value="10k", x=50, y=50
         )
         assert "error" in result
+
+
+class TestPinGeometry:
+    """Pin-coordinate transform (lib +Y up -> schematic +Y down) for connected capture.
+
+    Validated end-to-end against kicad-cli's netlister for angle 0/90/270 and
+    mirror x/y; these lock the pure transform math as a regression guard.
+    """
+
+    def test_angle_0_flips_y(self) -> None:
+        from kicad_mcp.tools.schematic import _transform_pin
+
+        # +Y in the library becomes -Y on the schematic; X is unchanged.
+        assert _transform_pin(2.0, 3.0, 100.0, 100.0, 0, None) == (102.0, 97.0)
+
+    def test_rotation_90_180_270(self) -> None:
+        from kicad_mcp.tools.schematic import _transform_pin
+
+        assert _transform_pin(2.0, 3.0, 100.0, 100.0, 90, None) == (97.0, 98.0)
+        assert _transform_pin(2.0, 3.0, 100.0, 100.0, 180, None) == (98.0, 103.0)
+        assert _transform_pin(2.0, 3.0, 100.0, 100.0, 270, None) == (103.0, 102.0)
+
+    def test_mirror(self) -> None:
+        from kicad_mcp.tools.schematic import _transform_pin
+
+        assert _transform_pin(2.0, 3.0, 100.0, 100.0, 0, "y") == (98.0, 97.0)
+        assert _transform_pin(2.0, 3.0, 100.0, 100.0, 0, "x") == (102.0, 103.0)
+
+
+class TestEmbeddedSymbolRename:
+    """The embedded lib symbol must be renamed to 'lib:Name' and serialize quoted."""
+
+    def test_rename_roundtrips_quoted(self) -> None:
+        from kicad_mcp.sexp.parser import parse as sexp_parse
+
+        # Mimic the embed step: deep_copy a lib symbol then rename its first atom.
+        node = sexp_parse('(symbol "R" (pin "1"))').deep_copy()
+        node.children[0].value = "super_sensor:R"
+        node.children[0]._original_str = '"super_sensor:R"'
+        assert '(symbol "super_sensor:R"' in node.to_string()
+
+    def test_naive_rename_would_be_lost(self) -> None:
+        # Setting only .value (the original WIP bug) does NOT round-trip, because
+        # to_string() re-emits the atom's preserved _original_str.
+        from kicad_mcp.sexp.parser import parse as sexp_parse
+
+        node = sexp_parse('(symbol "R")')
+        node.children[0].value = "super_sensor:R"  # _original_str still '"R"'
+        assert '"super_sensor:R"' not in node.to_string()
