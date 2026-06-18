@@ -66,9 +66,12 @@ ALLOWED_CLI_COMMANDS = frozenset(
 ALLOWED_CLI_SUBCOMMANDS = frozenset(
     {
         "drc",
+        "erc",
         "export",
         "render",
         # export sub-subcommands
+        "bom",
+        "netlist",
         "gerber",
         "gerbers",
         "drill",

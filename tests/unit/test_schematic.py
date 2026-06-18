@@ -259,3 +259,60 @@ class TestEmbeddedSymbolRename:
         node = sexp_parse('(symbol "R")')
         node.children[0].value = "super_sensor:R"  # _original_str still '"R"'
         assert '"super_sensor:R"' not in node.to_string()
+
+
+class TestSchematicEditOps:
+    """move/rotate/edit/junction/no-connect on placed symbols (in-memory, no libs)."""
+
+    def _new_sch(self, tmp_path: Path):
+        from kicad_mcp.tools import schematic as S
+
+        sch = str(tmp_path / "t.kicad_sch")
+        S._create_schematic_handler(sch)
+        S._open_schematic_handler(sch)
+        # Unknown lib -> 2-pin stub instance; fine for edit-op tests.
+        S._add_symbol_handler("Device:R", "R1", "10k", 100.0, 100.0)
+        return S, sch
+
+    def test_move_symbol(self, tmp_path: Path) -> None:
+        from kicad_mcp.schema.extract_schematic import extract_symbols
+        from kicad_mcp.sexp import Document
+
+        S, sch = self._new_sch(tmp_path)
+        assert S._move_symbol_handler("R1", 130.0, 80.0)["status"] == "moved"
+        S._save_schematic_handler()
+        r1 = next(s for s in extract_symbols(Document.load(sch)) if s.reference == "R1")
+        assert (r1.position.x, r1.position.y) == (130.0, 80.0)
+
+    def test_move_missing(self, tmp_path: Path) -> None:
+        S, _ = self._new_sch(tmp_path)
+        assert "error" in S._move_symbol_handler("R9", 1.0, 1.0)
+
+    def test_rotate_symbol(self, tmp_path: Path) -> None:
+        from kicad_mcp.schema.extract_schematic import extract_symbols
+        from kicad_mcp.sexp import Document
+
+        S, sch = self._new_sch(tmp_path)
+        assert S._rotate_symbol_handler("R1", 90)["status"] == "rotated"
+        S._save_schematic_handler()
+        r1 = next(s for s in extract_symbols(Document.load(sch)) if s.reference == "R1")
+        assert r1.position.angle == 90.0
+
+    def test_edit_property_quoted(self, tmp_path: Path) -> None:
+        S, sch = self._new_sch(tmp_path)
+        out = S._edit_sch_symbol_handler("R1", {"Value": "22k"})
+        assert out["status"] == "edited" and "Value" in out["updated"]
+        S._save_schematic_handler()
+        assert '"22k"' in Path(sch).read_text()
+
+    def test_edit_unknown_property(self, tmp_path: Path) -> None:
+        S, _ = self._new_sch(tmp_path)
+        assert "error" in S._edit_sch_symbol_handler("R1", {"Nope": "x"})
+
+    def test_junction_and_no_connect(self, tmp_path: Path) -> None:
+        S, sch = self._new_sch(tmp_path)
+        assert S._add_junction_handler(50.0, 50.0)["status"] == "added"
+        assert S._add_no_connect_handler(60.0, 60.0)["status"] == "added"
+        S._save_schematic_handler()
+        txt = Path(sch).read_text()
+        assert "(junction" in txt and "(no_connect" in txt

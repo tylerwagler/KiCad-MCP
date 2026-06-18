@@ -507,6 +507,73 @@ class KiCadCli:
             message="VRML file exported successfully",
         )
 
+    def run_sch_erc(self, sch_path: str, output_path: str | None = None) -> DrcResult:
+        """Run the Electrical Rules Check on a schematic (JSON report).
+
+        Reuses :class:`DrcResult` (violations/error_count/warning_count).
+        """
+        if not Path(sch_path).exists():
+            raise FileNotFoundError(f"Schematic not found: {sch_path}")
+
+        _created_temp = output_path is None
+        temp_path: str | None = None
+        if _created_temp:
+            fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="erc_")
+            os.close(fd)
+            output_path = temp_path or ""
+
+        try:
+            args = [
+                "sch",
+                "erc",
+                "--format",
+                "json",
+                "--output",
+                str(output_path),
+                "--severity-all",
+                "--units",
+                "mm",
+                sch_path,
+            ]
+            result = self._run(args)
+            try:
+                report = json.loads(Path(str(output_path)).read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, FileNotFoundError):
+                message = self._format_error(result, "kicad-cli produced no ERC report")
+                return DrcResult(
+                    passed=False,
+                    error_count=0,
+                    warning_count=0,
+                    report_path=output_path,
+                    message=f"ERC report unavailable: {message}",
+                )
+            return self._parse_drc_report(report, output_path, result.stderr.strip())
+        finally:
+            if _created_temp and temp_path:
+                with contextlib.suppress(OSError):
+                    os.unlink(temp_path)
+
+    def export_sch(self, sch_path: str, output_path: str, fmt: str = "pdf") -> ExportResult:
+        """Export a schematic to PDF or SVG via ``kicad-cli sch export``."""
+        if fmt not in ("pdf", "svg"):
+            raise KiCadCliError(f"unsupported schematic export format: {fmt}")
+        if not Path(sch_path).exists():
+            raise FileNotFoundError(f"Schematic not found: {sch_path}")
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        result = self._run(["sch", "export", fmt, "--output", output_path, sch_path])
+        if result.returncode != 0:
+            return ExportResult(
+                success=False,
+                output_path=output_path,
+                message=self._format_error(result, f"Schematic {fmt.upper()} export failed"),
+            )
+        return ExportResult(
+            success=True,
+            output_path=output_path,
+            message=f"Schematic {fmt.upper()} exported successfully",
+        )
+
     def export_pos(
         self,
         board_path: str,

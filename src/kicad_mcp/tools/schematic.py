@@ -903,3 +903,322 @@ register_tool(
     handler=_generate_netlist_handler,
     category="schematic",
 )
+
+
+# ── Edit / connectivity / ERC / export ──────────────────────────────
+
+
+def _replace_at(node: SExp, x: float, y: float, angle: float | None = None) -> None:
+    """Replace a node's (at ...) with fresh coordinates (keeps angle if None)."""
+    at = node.get("at")
+    if at is None:
+        return
+    if angle is None:
+        vals = at.atom_values
+        angle = float(vals[2]) if len(vals) > 2 else 0.0
+    idx = node.children.index(at)
+    node.children[idx] = sexp_parse(f"(at {x} {y} {angle})")
+
+
+def _move_symbol_handler(reference: str, x: float, y: float) -> dict[str, Any]:
+    """Move a placed symbol to a new position (its labels/properties move with it).
+
+    Args:
+        reference: Reference designator (e.g., "U1").
+        x: New X position (mm).
+        y: New Y position (mm).
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    node = _find_instance_node(doc, reference)
+    if node is None:
+        return {"error": f"Symbol '{reference}' not found"}
+    at = node.get("at")
+    vals = at.atom_values if at else []
+    try:
+        dx = x - float(vals[0])
+        dy = y - float(vals[1])
+    except (ValueError, IndexError):
+        return {"error": f"Symbol '{reference}' has no valid position"}
+    _replace_at(node, x, y)
+    # Shift each property's own position by the same delta.
+    for prop in node.find_all("property"):
+        pat = prop.get("at")
+        if pat is None:
+            continue
+        pv = pat.atom_values
+        try:
+            pa = float(pv[2]) if len(pv) > 2 else 0.0
+            _replace_at(prop, float(pv[0]) + dx, float(pv[1]) + dy, pa)
+        except (ValueError, IndexError):
+            continue
+    schematic_state.refresh()
+    return {"status": "moved", "reference": reference, "position": {"x": x, "y": y}}
+
+
+def _rotate_symbol_handler(reference: str, angle: float) -> dict[str, Any]:
+    """Rotate a placed symbol to an absolute angle (0/90/180/270 degrees).
+
+    Args:
+        reference: Reference designator (e.g., "U1").
+        angle: Rotation in degrees.
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    node = _find_instance_node(doc, reference)
+    if node is None:
+        return {"error": f"Symbol '{reference}' not found"}
+    at = node.get("at")
+    vals = at.atom_values if at else []
+    try:
+        _replace_at(node, float(vals[0]), float(vals[1]), float(angle))
+    except (ValueError, IndexError):
+        return {"error": f"Symbol '{reference}' has no valid position"}
+    schematic_state.refresh()
+    return {"status": "rotated", "reference": reference, "angle": angle}
+
+
+def _edit_sch_symbol_handler(reference: str, properties: dict[str, str]) -> dict[str, Any]:
+    """Edit a placed symbol's property values (e.g., Value, Footprint).
+
+    Args:
+        reference: Reference designator (e.g., "U1").
+        properties: Map of property name -> new value (e.g., {"Value": "22k"}).
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    node = _find_instance_node(doc, reference)
+    if node is None:
+        return {"error": f"Symbol '{reference}' not found"}
+
+    updated: list[str] = []
+    for prop in node.find_all("property"):
+        pname = prop.first_value
+        if pname in properties:
+            atoms = [c for c in prop.children if c.is_atom]
+            if len(atoms) >= 2:
+                new_val = str(properties[pname])
+                atoms[1].value = new_val
+                # KiCad always quotes property field values; force quotes (the value
+                # may lack special chars, where _quote_if_needed wouldn't quote).
+                escaped = new_val.replace("\\", "\\\\").replace('"', '\\"')
+                atoms[1]._original_str = f'"{escaped}"'
+                updated.append(pname)
+    if not updated:
+        return {"error": f"No matching properties on {reference}: {sorted(properties)}"}
+    schematic_state.refresh()
+    return {"status": "edited", "reference": reference, "updated": updated}
+
+
+def _add_junction_handler(x: float, y: float) -> dict[str, Any]:
+    """Add a wire junction dot at a point where wires cross/meet.
+
+    Args:
+        x: X position (mm).
+        y: Y position (mm).
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    node = sexp_parse(
+        f'(junction (at {x} {y}) (diameter 0) (color 0 0 0 0) (uuid "{_uuid.uuid4()}"))'
+    )
+    _insert_before_sheet_instances(doc, node)
+    schematic_state.refresh()
+    return {"status": "added", "type": "junction", "position": {"x": x, "y": y}}
+
+
+def _add_no_connect_handler(x: float, y: float) -> dict[str, Any]:
+    """Add a no-connect (X) flag on an unused pin to keep ERC clean.
+
+    Args:
+        x: X position of the pin (mm).
+        y: Y position of the pin (mm).
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    node = sexp_parse(f'(no_connect (at {x} {y}) (uuid "{_uuid.uuid4()}"))')
+    _insert_before_sheet_instances(doc, node)
+    schematic_state.refresh()
+    return {"status": "added", "type": "no_connect", "position": {"x": x, "y": y}}
+
+
+def _insert_before_sheet_instances(doc: Document, node: SExp) -> None:
+    """Insert a node before (sheet_instances) if present, else append."""
+    insert_idx = len(doc.root.children)
+    for i, child in enumerate(doc.root.children):
+        if child.name == "sheet_instances":
+            insert_idx = i
+            break
+    doc.root.children.insert(insert_idx, node)
+
+
+def _run_erc_handler() -> dict[str, Any]:
+    """Run the Electrical Rules Check (ERC) on the current schematic via kicad-cli.
+
+    Reflects in-memory edits (writes a temp copy first). Returns violations.
+    """
+    import tempfile
+    from pathlib import Path as _P
+
+    from .. import schematic_state
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+
+    doc = schematic_state.get_document()
+    try:
+        cli = KiCadCli()
+    except KiCadCliNotFound:
+        return {"error": "kicad-cli not found. Install KiCad 8+."}
+
+    fd, tmp = tempfile.mkstemp(suffix=".kicad_sch", prefix="erc_")
+    import os as _os
+
+    _os.close(fd)
+    try:
+        doc.save(tmp)
+        result = cli.run_sch_erc(tmp)
+    except KiCadCliError as exc:
+        return {"error": f"ERC failed: {exc}"}
+    finally:
+        _P(tmp).unlink(missing_ok=True)
+    return result.to_dict()
+
+
+def _export_schematic_handler(output_path: str, fmt: str) -> dict[str, Any]:
+    """Export the schematic to PDF or SVG (reflects in-memory edits)."""
+    import tempfile
+    from pathlib import Path as _P
+
+    from .. import schematic_state
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+    from ..security import SecurityError, get_validator
+
+    try:
+        get_validator().validate_output(output_path)
+    except SecurityError as exc:
+        return {"error": f"Security error: {exc}"}
+
+    doc = schematic_state.get_document()
+    try:
+        cli = KiCadCli()
+    except KiCadCliNotFound:
+        return {"error": "kicad-cli not found. Install KiCad 8+."}
+
+    fd, tmp = tempfile.mkstemp(suffix=".kicad_sch", prefix="schexp_")
+    import os as _os
+
+    _os.close(fd)
+    try:
+        doc.save(tmp)
+        result = cli.export_sch(tmp, output_path, fmt=fmt)
+    except KiCadCliError as exc:
+        return {"error": f"{fmt.upper()} export failed: {exc}"}
+    finally:
+        _P(tmp).unlink(missing_ok=True)
+    return result.to_dict()
+
+
+def _export_schematic_pdf_handler(output_path: str) -> dict[str, Any]:
+    """Export the current schematic to PDF.
+
+    Args:
+        output_path: Output .pdf path.
+    """
+    return _export_schematic_handler(output_path, "pdf")
+
+
+def _export_schematic_svg_handler(output_path: str) -> dict[str, Any]:
+    """Export the current schematic to SVG.
+
+    Args:
+        output_path: Output .svg path.
+    """
+    return _export_schematic_handler(output_path, "svg")
+
+
+register_tool(
+    name="move_symbol",
+    description="Move a placed schematic symbol to a new position (properties move with it).",
+    parameters={
+        "reference": {"type": "string", "description": "Reference designator (e.g., 'U1')."},
+        "x": {"type": "number", "description": "New X (mm)."},
+        "y": {"type": "number", "description": "New Y (mm)."},
+    },
+    handler=_move_symbol_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="rotate_symbol",
+    description="Rotate a placed schematic symbol to an absolute angle (0/90/180/270).",
+    parameters={
+        "reference": {"type": "string", "description": "Reference designator (e.g., 'U1')."},
+        "angle": {"type": "number", "description": "Rotation in degrees."},
+    },
+    handler=_rotate_symbol_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="edit_sch_symbol",
+    description="Edit a placed symbol's property values (Value, Footprint, etc.).",
+    parameters={
+        "reference": {"type": "string", "description": "Reference designator (e.g., 'U1')."},
+        "properties": {
+            "type": "object",
+            "description": "Property name -> new value, e.g. {'Value': '22k'}.",
+        },
+    },
+    handler=_edit_sch_symbol_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="add_junction",
+    description="Add a wire junction dot where wires meet/cross.",
+    parameters={
+        "x": {"type": "number", "description": "X position (mm)."},
+        "y": {"type": "number", "description": "Y position (mm)."},
+    },
+    handler=_add_junction_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="add_no_connect",
+    description="Add a no-connect (X) flag on an unused pin to keep ERC clean.",
+    parameters={
+        "x": {"type": "number", "description": "Pin X position (mm)."},
+        "y": {"type": "number", "description": "Pin Y position (mm)."},
+    },
+    handler=_add_no_connect_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="run_erc",
+    description="Run the Electrical Rules Check (ERC) on the schematic via kicad-cli.",
+    parameters={},
+    handler=_run_erc_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="export_schematic_pdf",
+    description="Export the current schematic to PDF.",
+    parameters={"output_path": {"type": "string", "description": "Output .pdf path."}},
+    handler=_export_schematic_pdf_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="export_schematic_svg",
+    description="Export the current schematic to SVG.",
+    parameters={"output_path": {"type": "string", "description": "Output .svg path."}},
+    handler=_export_schematic_svg_handler,
+    category="schematic",
+)
