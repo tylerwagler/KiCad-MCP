@@ -548,3 +548,52 @@ class TestJlcpcbToolHandlers:
         assert "Bottom" in lines[2]  # R2 on B.Cu
         assert "90.0" in lines[1]
         assert "45.0" in lines[2]
+
+
+class TestDatasheetTools:
+    """get_datasheet_url + enrich_datasheets (JLCPCB lookup, mocked network)."""
+
+    def _part(self, url: str):
+        from kicad_mcp.manufacturers.jlcpcb import JlcpcbPart
+
+        return JlcpcbPart(
+            lcsc=123,
+            mfr="ACME-1",
+            package="0805",
+            description="x",
+            stock=1,
+            price=0.1,
+            basic=True,
+            datasheet_url=url,
+        )
+
+    def test_get_datasheet_url(self, monkeypatch) -> None:
+        import kicad_mcp.tools.jlcpcb as J
+        from kicad_mcp.manufacturers import jlcpcb as M
+        from kicad_mcp.manufacturers.jlcpcb import JlcpcbSearchResult
+
+        monkeypatch.setattr(
+            M,
+            "search_parts",
+            lambda **kw: JlcpcbSearchResult(
+                "q", 2, [self._part(""), self._part("http://ds/x.pdf")]
+            ),
+        )
+        out = J._get_datasheet_url_handler("STM32")
+        assert out["found"] is True and out["datasheet_url"] == "http://ds/x.pdf"
+
+    def test_get_datasheet_url_none(self, monkeypatch) -> None:
+        import kicad_mcp.tools.jlcpcb as J
+        from kicad_mcp.manufacturers import jlcpcb as M
+        from kicad_mcp.manufacturers.jlcpcb import JlcpcbSearchResult
+
+        monkeypatch.setattr(M, "search_parts", lambda **kw: JlcpcbSearchResult("q", 0, []))
+        out = J._get_datasheet_url_handler("nope")
+        assert out["found"] is False
+
+    def test_enrich_no_board(self, monkeypatch) -> None:
+        import kicad_mcp.tools.jlcpcb as J
+        from kicad_mcp import state
+
+        monkeypatch.setattr(state, "is_loaded", lambda: False)
+        assert "error" in J._enrich_datasheets_handler()

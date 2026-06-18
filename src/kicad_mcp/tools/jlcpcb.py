@@ -257,7 +257,97 @@ def _jlcpcb_export_bom_cpl_handler(
     return result
 
 
+def _get_datasheet_url_handler(query: str, package: str | None = None) -> dict[str, Any]:
+    """Look up a component's datasheet URL via the JLCPCB/LCSC catalog.
+
+    Args:
+        query: Part value or number (e.g., "STM32G0B1CET6", "100nF 0805").
+        package: Optional package filter (e.g., "0805", "SOIC-8").
+    """
+    from ..manufacturers.jlcpcb import JlcpcbApiError, search_parts
+
+    try:
+        result = search_parts(query=query, package=package, limit=10)
+    except JlcpcbApiError as e:
+        return {"error": str(e)}
+
+    for part in result.parts:
+        if part.datasheet_url:
+            return {
+                "found": True,
+                "query": query,
+                "datasheet_url": part.datasheet_url,
+                "lcsc_code": part.lcsc_code,
+                "manufacturer_part": part.mfr,
+            }
+    return {"found": False, "query": query, "message": "No datasheet found for query"}
+
+
+def _enrich_datasheets_handler(limit: int = 50) -> dict[str, Any]:
+    """Resolve datasheet URLs for the loaded board's components (by value).
+
+    Looks each unique component value up in the JLCPCB catalog and returns a
+    value -> datasheet URL map. Read-only (does not modify the board).
+
+    Args:
+        limit: Max unique values to look up. Default: 50.
+    """
+    from .. import state
+    from ..manufacturers.jlcpcb import JlcpcbApiError, search_parts
+
+    if not state.is_loaded():
+        return {"error": "No board loaded. Use open_project first."}
+
+    values: list[str] = []
+    for fp in state.get_footprints():
+        if fp.value and fp.value not in values:
+            values.append(fp.value)
+    values = values[:limit]
+
+    found: dict[str, str] = {}
+    misses: list[str] = []
+    for value in values:
+        try:
+            result = search_parts(query=value, limit=5)
+        except JlcpcbApiError:
+            misses.append(value)
+            continue
+        url = next((p.datasheet_url for p in result.parts if p.datasheet_url), "")
+        if url:
+            found[value] = url
+        else:
+            misses.append(value)
+
+    return {
+        "status": "enriched",
+        "resolved_count": len(found),
+        "datasheets": found,
+        "unresolved": misses,
+    }
+
+
 # ── Registration ────────────────────────────────────────────────────
+
+register_tool(
+    name="get_datasheet_url",
+    description="Look up a component's datasheet URL from the JLCPCB/LCSC catalog.",
+    parameters={
+        "query": {"type": "string", "description": "Part value/number (e.g., 'STM32G0B1CET6')."},
+        "package": {"type": "string", "description": "Optional package filter (e.g., '0805')."},
+    },
+    handler=_get_datasheet_url_handler,
+    category="jlcpcb",
+)
+
+register_tool(
+    name="enrich_datasheets",
+    description="Resolve datasheet URLs for the loaded board's components (value -> URL map).",
+    parameters={
+        "limit": {"type": "integer", "description": "Max unique values to look up. Default: 50."},
+    },
+    handler=_enrich_datasheets_handler,
+    category="jlcpcb",
+)
 
 register_tool(
     name="jlcpcb_search_parts",
