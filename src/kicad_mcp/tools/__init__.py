@@ -6,6 +6,7 @@ from . import (  # noqa: F401
     autoplacement,
     autoroute,
     board_setup,
+    creation,
     direct,
     drc,
     export,
