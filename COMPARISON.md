@@ -73,20 +73,40 @@ parsing + real transactions); they made the pragmatic, feature-rich choice (lean
 `pcbnew`, ship more verbs).
 
 - For **safety, portability, and correctness**, ours is the better-engineered base.
-- For **breadth of "can it actually do X on a real board"**, they are ahead today —
-  especially schematic editing, footprint/symbol creation, and real autorouting.
+- For **breadth of "can it actually do X on a real board"**, the gap is largely closed:
+  schematic capture (now correct *and* broader — 20 tools), footprint/symbol creation,
+  real autorouting (Freerouting), and datasheet enrichment all landed (see records below).
 
-## Gap-closing roadmap (highest leverage first)
+## Gap status (was: gap-closing roadmap)
 
-1. ✅ **Freerouting integration** — _done_ (see below).
-2. **Deepen schematic tools** — close the 10 → 27 gap; our parser already reads
-   `.kicad_sch`, so this is incremental.
-3. **Footprint / symbol creation** — we already have round-trip S-expr write;
-   generating `.kicad_mod`/`.kicad_sym` is within reach without KiCad.
-4. ✅ **Visual feedback** (`get_board_2d_view` via kicad-cli SVG render) — _done_.
-5. ✅ **Convenience placement tools** — `duplicate_component`, `place_component_array`,
-   `align_components` (left/right/top/bottom, center, distribute); `group_components`
-   already existed — _done_.
+1. ✅ **Freerouting integration** — done (real outline polygon too).
+2. ✅ **Schematic depth** — connected capture fixed correctness (real symbols, pin
+   geometry, footprints, instances); breadth grown 10 → **20 tools** (move/rotate/edit,
+   junction, no-connect, ERC, PDF/SVG export, pin-position).
+3. ✅ **Footprint / symbol creation** — `create_footprint` / `create_symbol`.
+4. ✅ **Visual feedback** — `get_board_2d_view`.
+5. ✅ **Convenience placement** — duplicate / array / align / group.
+6. ✅ **Datasheet enrichment** — `get_datasheet_url` / `enrich_datasheets`.
+
+### Genuinely remaining (low ROI / niche)
+
+- **Differential-pair routing** — Freerouting already honours diff-pair netclasses; a
+  dedicated tool is finicky to drive via DSN. Deferred unless needed.
+- **`import_svg_logo`** — needs a full SVG-path → KiCad-polygon converter; niche.
+- **JLCPCB bulk offline catalog** — we have a live API query; the 3–5 GB downloadable
+  SQLite is high-cost, low-value parity.
+
+---
+
+### Completed: footprint/symbol creation, schematic breadth, datasheets (2026-06-18)
+
+- **`create_footprint` / `create_symbol`** — generate `.kicad_mod` / `.kicad_sym` from
+  scratch (pure-Python S-expr). Footprint verified via `kicad-cli pcb drc`; symbol via
+  `add_symbol` resolution + `kicad-cli sch erc`.
+- **Schematic breadth (12 → 20 tools)** — `move_symbol`, `rotate_symbol`,
+  `edit_sch_symbol`, `add_junction`, `add_no_connect`, `run_erc`,
+  `export_schematic_pdf`/`_svg`, plus `get_pin_position` from the connected-capture work.
+- **Datasheets** — `get_datasheet_url`, `enrich_datasheets` over the JLCPCB/LCSC catalog.
 
 ### Completed: kipy live PCB backend, hybrid live-preferred (2026-06-17)
 
