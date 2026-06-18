@@ -70,6 +70,72 @@ def _coord(x_mm: float, y_mm: float) -> tuple[int, int]:
     return _u(x_mm), _u(-y_mm)
 
 
+def chain_outline_segments(
+    segments: list[tuple[tuple[float, float], tuple[float, float]]],
+) -> list[tuple[float, float]] | None:
+    """Order unsorted edge segments into a single closed polygon's vertices.
+
+    ``segments`` is a list of ((x1,y1),(x2,y2)) endpoints in mm. Returns the
+    ordered vertices, or None if they don't form one simple closed loop (caller
+    then falls back to the bounding box).
+    """
+    if len(segments) < 3:
+        return None
+    tol = 1e-3
+
+    def close(a: tuple[float, float], b: tuple[float, float]) -> bool:
+        return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+    remaining = list(segments)
+    first = remaining.pop(0)
+    pts: list[tuple[float, float]] = [first[0], first[1]]
+    while remaining:
+        tail = pts[-1]
+        for i, (s, e) in enumerate(remaining):
+            if close(s, tail):
+                pts.append(e)
+                remaining.pop(i)
+                break
+            if close(e, tail):
+                pts.append(s)
+                remaining.pop(i)
+                break
+        else:
+            return None  # broken chain — not a single closed loop
+    if len(pts) >= 2 and close(pts[-1], pts[0]):
+        pts.pop()  # drop the duplicate closing vertex
+    return pts if len(pts) >= 3 else None
+
+
+def _outline_points_from_doc(doc: Document) -> list[tuple[float, float]] | None:
+    """Read the real Edge.Cuts polygon from the parsed board (straight segments).
+
+    Returns None if the outline contains arcs/circles (caller falls back to the
+    bounding box, which is still a valid routing boundary).
+    """
+    for curve in ("gr_arc", "gr_circle"):
+        for node in doc.root.find_all(curve):
+            lyr = node.get("layer")
+            if lyr is not None and lyr.first_value == "Edge.Cuts":
+                return None
+    segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for node in doc.root.find_all("gr_line"):
+        lyr = node.get("layer")
+        if lyr is None or lyr.first_value != "Edge.Cuts":
+            continue
+        s = node.get("start")
+        e = node.get("end")
+        if s is None or e is None:
+            continue
+        try:
+            sp = (float(s.atom_values[0]), float(s.atom_values[1]))
+            ep = (float(e.atom_values[0]), float(e.atom_values[1]))
+        except (ValueError, IndexError):
+            continue
+        segs.append((sp, ep))
+    return chain_outline_segments(segs)
+
+
 def _tok(value: str) -> str:
     """Quote a token if it isn't a simple Specctra identifier."""
     if value and _SIMPLE_TOKEN.match(value):
@@ -122,8 +188,17 @@ def _pad_shape_body(pad: Pad, layer: str, angle_deg: float) -> str:
     return f"(shape (rect {layer} {_u(-w / 2)} {_u(-h / 2)} {_u(w / 2)} {_u(h / 2)}))"
 
 
-def board_to_dsn(doc: Document, options: DsnOptions | None = None, name: str = "board") -> str:
+def board_to_dsn(
+    doc: Document,
+    options: DsnOptions | None = None,
+    name: str = "board",
+    outline_points: list[tuple[float, float]] | None = None,
+) -> str:
     """Build a Specctra DSN string from a parsed board document.
+
+    The routing boundary uses the real Edge.Cuts polygon when available:
+    ``outline_points`` (e.g. supplied live from KiCad) takes precedence, else the
+    polygon is read from the parsed board, else it falls back to the bounding box.
 
     Raises :class:`DsnExportError` if the board lacks an outline or copper layers.
     """
@@ -134,6 +209,9 @@ def board_to_dsn(doc: Document, options: DsnOptions | None = None, name: str = "
     bbox = extract_board_outline(doc)
     if bbox is None:
         raise DsnExportError("No board outline (Edge.Cuts) found; cannot define routing boundary")
+
+    # Prefer a real outline polygon (live override, then the parsed file) over the bbox.
+    outline = outline_points or _outline_points_from_doc(doc)
 
     # Copper layers, in stack order (F.Cu first, B.Cu last).
     copper_layers = _board_copper_layers(doc)
@@ -171,6 +249,7 @@ def board_to_dsn(doc: Document, options: DsnOptions | None = None, name: str = "
         name=name,
         copper_layers=copper_layers,
         bbox=bbox,
+        outline=outline,
         opts=opts,
         placements=placements,
         images=images,
@@ -254,6 +333,7 @@ def _assemble(
     name: str,
     copper_layers: list[str],
     bbox: BoundingBox,
+    outline: list[tuple[float, float]] | None,
     opts: DsnOptions,
     placements: list[str],
     images: list[str],
@@ -268,10 +348,16 @@ def _assemble(
         for i, lyr in enumerate(copper_layers)
     )
 
-    # Rectangular boundary from the board bounding box (closed polyline).
-    x0, y0 = _coord(bbox.min_x, bbox.min_y)
-    x1, y1 = _coord(bbox.max_x, bbox.max_y)
-    pts = f"{x0} {y0}  {x1} {y0}  {x1} {y1}  {x0} {y1}  {x0} {y0}"
+    # Real outline polygon when available, else the bounding-box rectangle.
+    if outline:
+        coords = [f"{cx} {cy}" for cx, cy in (_coord(x, y) for x, y in outline)]
+        cx0, cy0 = _coord(outline[0][0], outline[0][1])
+        coords.append(f"{cx0} {cy0}")  # close the loop
+        pts = "  ".join(coords)
+    else:
+        x0, y0 = _coord(bbox.min_x, bbox.min_y)
+        x1, y1 = _coord(bbox.max_x, bbox.max_y)
+        pts = f"{x0} {y0}  {x1} {y0}  {x1} {y1}  {x0} {y1}  {x0} {y0}"
     boundary = f"    (boundary (path pcb 0  {pts}))"
 
     rule = f"    (rule (width {_u(opts.trace_width)}) (clearance {_u(opts.clearance)}))"

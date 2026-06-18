@@ -158,6 +158,38 @@ def get_footprints() -> list[Footprint]:
     return state.parser_footprints()
 
 
+def live_outline_points(ipc: IpcBackend) -> list[tuple[float, float]] | None:
+    """Real board outline polygon (mm) from the live KiCad Edge.Cuts, or None.
+
+    Returns None if the outline isn't a chain of straight segments (e.g. it
+    contains arcs) — callers then fall back to the parsed file / bounding box.
+    """
+    from .specctra.dsn import chain_outline_segments
+
+    try:
+        import kipy.util.board_layer as ubl
+
+        segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        for shape in ipc.live_board().get_shapes():
+            try:
+                if ubl.canonical_name(shape.layer) != "Edge.Cuts":
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            if type(shape).__name__ != "BoardSegment":
+                return None  # an arc/curve on the outline — fall back
+            start, end = shape.start, shape.end
+            segs.append(
+                (
+                    (ipc._nm_to_mm(start.x), ipc._nm_to_mm(start.y)),
+                    (ipc._nm_to_mm(end.x), ipc._nm_to_mm(end.y)),
+                )
+            )
+        return chain_outline_segments(segs)
+    except Exception:  # noqa: BLE001 — live outline is best-effort
+        return None
+
+
 def get_summary() -> BoardSummary:
     """Board summary from the live board if connected, else the parsed file."""
     ipc = _live()

@@ -108,9 +108,12 @@ and Freerouting (routing) all remain.
 - **Phase 3:** session commits translate all applied changes into **one atomic kipy
   commit** (binding nets by name), replacing per-change best-effort pushes.
 - **Phase 4:** deprecated the built-in A* router (`auto_route_*`, `preview_route`) in
-  favor of `autoroute_freerouting`; kept ratsnest (kipy has no ratsnest API). Full
-  real-geometry adoption in DSN export is deferred — it needs live pad mapping and live
-  verification.
+  favor of `autoroute_freerouting`; kept ratsnest (kipy has no ratsnest API). DSN export
+  now uses the **real Edge.Cuts outline polygon** (chained from straight segments) instead
+  of the bbox rectangle — read from the parsed file offline, or live from kipy
+  `get_shapes()` when KiCad is connected; bbox remains the fallback (curved outlines).
+  (Pad geometry was already read accurately from the file; live pad→image reconstruction
+  isn't reliably supported by the kipy API and adds no routing value, so it's not used.)
 - **Phase 5:** `scripts/verify_kipy.py` (manual live harness) + a gated
   `tests/integration/test_ipc_integration.py`; mock-based unit tests construct **real**
   kipy objects to verify field/enum/coordinate correctness.

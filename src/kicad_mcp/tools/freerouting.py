@@ -32,6 +32,18 @@ def _net_numbers(doc: Any) -> dict[str, int]:
     return {n.name: n.number for n in extract_nets(doc) if n.name}
 
 
+def _live_outline_points() -> list[tuple[float, float]] | None:
+    """Real board outline from a connected KiCad, or None (DSN then uses the file)."""
+    from ..backends.ipc_api import IpcBackend
+
+    ipc = IpcBackend.get()
+    if not ipc.is_connected():
+        return None
+    from .. import board_provider
+
+    return board_provider.live_outline_points(ipc)
+
+
 # ── check_freerouting ──────────────────────────────────────────────
 
 
@@ -82,7 +94,9 @@ def _export_dsn_handler(
         via_drill=via_drill,
     )
     try:
-        dsn = board_to_dsn(doc, opts, name=Path(output_path).stem)
+        dsn = board_to_dsn(
+            doc, opts, name=Path(output_path).stem, outline_points=_live_outline_points()
+        )
     except DsnExportError as exc:
         return {"error": str(exc)}
 
@@ -241,7 +255,7 @@ def _autoroute_freerouting_handler(
         via_drill=via_drill,
     )
     try:
-        dsn = board_to_dsn(doc, opts, name="autoroute")
+        dsn = board_to_dsn(doc, opts, name="autoroute", outline_points=_live_outline_points())
     except DsnExportError as exc:
         return {"error": str(exc)}
 

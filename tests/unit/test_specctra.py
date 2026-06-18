@@ -168,3 +168,78 @@ class TestFreeroutingBackend:
         monkeypatch.setattr(freerouting, "find_runtime", lambda: None)
         with pytest.raises(freerouting.FreeroutingNotFound):
             freerouting.route("in.dsn", "out.ses")
+
+
+class TestOutlinePolygon:
+    """Real Edge.Cuts outline polygon in DSN (vs bbox rectangle)."""
+
+    def test_chain_rectangle(self) -> None:
+        from kicad_mcp.specctra.dsn import chain_outline_segments
+
+        segs = [((0, 0), (10, 0)), ((10, 0), (10, 5)), ((10, 5), (0, 5)), ((0, 5), (0, 0))]
+        poly = chain_outline_segments(segs)
+        assert poly is not None and len(poly) == 4
+
+    def test_chain_lshape_unordered(self) -> None:
+        from kicad_mcp.specctra.dsn import chain_outline_segments
+
+        # 6 segments, deliberately unordered and with reversed endpoints.
+        segs = [
+            ((0, 0), (20, 0)),
+            ((20, 10), (20, 0)),
+            ((10, 10), (20, 10)),
+            ((10, 20), (10, 10)),
+            ((0, 20), (10, 20)),
+            ((0, 0), (0, 20)),
+        ]
+        poly = chain_outline_segments(segs)
+        assert poly == [(0, 0), (20, 0), (20, 10), (10, 10), (10, 20), (0, 20)]
+
+    def test_chain_broken_returns_none(self) -> None:
+        from kicad_mcp.specctra.dsn import chain_outline_segments
+
+        # Disconnected segments don't form a single loop.
+        assert (
+            chain_outline_segments([((0, 0), (1, 0)), ((5, 5), (6, 5)), ((9, 9), (8, 9))]) is None
+        )
+
+    @pytest.mark.skipif(not BOARD_PATH.exists(), reason="Board fixture not available")
+    def test_outline_from_parsed_file(self) -> None:
+        from kicad_mcp.specctra.dsn import _outline_points_from_doc
+
+        doc = Document.load(BOARD_PATH)
+        pts = _outline_points_from_doc(doc)
+        assert pts == [(0.0, 0.0), (50.0, 0.0), (50.0, 30.0), (0.0, 30.0)]
+
+    def test_dsn_emits_real_polygon_not_bbox(self) -> None:
+        import re
+        from pathlib import Path
+
+        from kicad_mcp.sexp import Document as _Doc
+        from kicad_mcp.sexp.parser import parse as _parse
+        from kicad_mcp.specctra.dsn import board_to_dsn
+
+        # L-shaped board: a bbox boundary would have 4 distinct corners; the real
+        # outline has 6.
+        segs = [
+            ((0, 0), (20, 0)),
+            ((20, 0), (20, 10)),
+            ((20, 10), (10, 10)),
+            ((10, 10), (10, 20)),
+            ((10, 20), (0, 20)),
+            ((0, 20), (0, 0)),
+        ]
+        body = "".join(
+            f'(gr_line (start {a[0]} {a[1]}) (end {b[0]} {b[1]}) (layer "Edge.Cuts"))'
+            for a, b in segs
+        )
+        root = _parse(
+            '(kicad_pcb (version 20241229) (generator "x")'
+            ' (layers (0 "F.Cu" signal)(31 "B.Cu" signal)) (net 0 "")' + body + ")"
+        )
+        doc = _Doc(path=Path("/tmp/L.kicad_pcb"), root=root, raw_text="")
+        dsn = board_to_dsn(doc, name="L")
+        m = re.search(r"\(boundary \(path pcb 0  ([^)]+)\)", dsn)
+        assert m is not None
+        # 6 polygon vertices + 1 closing point = 7 coordinate pairs.
+        assert len(m.group(1).split()) // 2 == 7
