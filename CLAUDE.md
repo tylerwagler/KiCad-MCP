@@ -47,12 +47,16 @@ src/kicad_mcp/
 ├── server.py           # FastMCP server creation and startup
 ├── tools/
 │   ├── registry.py     # ToolSpec + TOOL_REGISTRY (single source of truth)
-│   └── router.py       # Meta-tools for dynamic discovery/execution
+│   ├── router.py       # Meta-tools for dynamic discovery/execution
+│   └── hierarchy.py    # Multi-sheet schematic navigation/editing tools
 ├── resources/          # MCP Resources (read-only board/project state)
 ├── prompts/            # MCP Prompt templates (DRC debug, design review, etc.)
 ├── backends/           # KiCad communication backends
+│   └── format_version.py  # Detect KiCad file-format stamps from kicad-cli
 ├── sexp/               # S-expression parser (zero-dependency KiCad file reading)
 ├── schema/             # Typed KiCad file models (board, schematic, footprint)
+│   ├── hierarchy.py    # Sheet-tree resolution (reuse, cycles, instance paths)
+│   └── connectivity.py # Cross-sheet net + port-mismatch analysis
 ├── session/            # Session/transaction model with undo/rollback
 └── manufacturers/      # DRC rule presets (JLCPCB, OSHPark, PCBWay, etc.)
 ```

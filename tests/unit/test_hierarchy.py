@@ -412,3 +412,38 @@ class TestAnnotation:
     def test_annotate_clean_is_noop(self, loaded):
         res = H._annotate_hierarchy_handler()
         assert res["change_count"] == 0
+
+    def test_annotate_preserves_power_refs(self, tmp_path):
+        import shutil
+
+        for f in ("root.kicad_sch", "child.kicad_sch"):
+            shutil.copy(FIXTURES / f, tmp_path / f)
+        child = tmp_path / "child.kicad_sch"
+        power = (
+            '\t(symbol (lib_id "power:GND") (at 20 20 0) (unit 1)'
+            ' (in_bom no) (on_board yes)'
+            ' (uuid "0a0a0a0a-0a0a-0a0a-0a0a-0a0a0a0a0a0a")\n'
+            '\t\t(property "Reference" "#PWR01" (at 20 20 0)'
+            " (effects (font (size 1.27 1.27))))\n"
+            '\t\t(property "Value" "GND" (at 20 20 0)'
+            " (effects (font (size 1.27 1.27))))\n"
+            '\t\t(pin "1" (uuid "0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b"))\n'
+            '\t\t(instances (project "root"\n'
+            f'\t\t\t(path "/{ROOT_UUID}/{S1}" (reference "#PWR01") (unit 1))\n'
+            f'\t\t\t(path "/{ROOT_UUID}/{S2}" (reference "#PWR01") (unit 1))))\n'
+            "\t)\n"
+        )
+        # Inject the duplicate-#PWR symbol before the closing sheet_instances.
+        child.write_text(
+            child.read_text().replace("\t(sheet_instances", power + "\t(sheet_instances")
+        )
+        H._open_hierarchy_handler(str(tmp_path / "root.kicad_sch"))
+        res = H._annotate_hierarchy_handler()
+        # Power refs are auto-managed → left untouched (R1/R2 are already fine).
+        assert res["change_count"] == 0
+        pwr = [
+            c
+            for c in H._list_hierarchical_symbols_handler()["components"]
+            if c["reference"] == "#PWR01"
+        ]
+        assert len(pwr) == 2

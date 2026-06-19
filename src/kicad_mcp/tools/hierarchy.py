@@ -440,6 +440,11 @@ def _annotate_hierarchy_handler(dry_run: bool = False) -> dict[str, Any]:
     changes: list[dict[str, Any]] = []
     for comp in h.enumerate_components():
         ref = comp.reference
+        # Power/auto symbols (#PWR, #FLG, …) are auto-managed by KiCad — never
+        # renumber them, but reserve their refs so real parts can't collide.
+        if ref.startswith("#"):
+            used.add(ref)
+            continue
         prefix, number = split_reference(ref)
         new_ref = next_free_reference(prefix, used) if number is None or ref in used else ref
         used.add(new_ref)
