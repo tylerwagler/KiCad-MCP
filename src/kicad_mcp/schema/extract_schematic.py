@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from ..sexp import Document, SExp
 from .common import Position
-from .schematic import Label, PowerPort, SchematicSummary, SchPin, SchSymbol, Wire
+from .schematic import (
+    HierarchicalLabel,
+    Label,
+    PowerPort,
+    SchematicSummary,
+    SchPin,
+    SchSymbol,
+    Sheet,
+    SheetPin,
+    SymbolInstance,
+    Wire,
+)
 
 
 def _float(val: str | None, default: float = 0.0) -> float:
@@ -35,6 +46,28 @@ def _bool_val(node: SExp | None, default: bool = True) -> bool:
     if val == "yes":
         return True
     return default
+
+
+def _extract_symbol_instances(sym_node: SExp) -> list[SymbolInstance]:
+    """Extract the per-hierarchy-path instances of a placed symbol.
+
+    Shape: ``(instances (project NAME (path "/.." (reference R) (unit N)) ...))``.
+    A symbol in a reused sheet carries one path per placement, each with its
+    own reference designator.
+    """
+    instances: list[SymbolInstance] = []
+    inst_node = sym_node.get("instances")
+    if inst_node is None:
+        return instances
+    for proj_node in inst_node.find_all("project"):
+        for path_node in proj_node.find_all("path"):
+            path = path_node.first_value or ""
+            ref_node = path_node.get("reference")
+            ref = ref_node.first_value if ref_node else ""
+            unit_node = path_node.get("unit")
+            unit = int(unit_node.first_value) if unit_node and unit_node.first_value else 1
+            instances.append(SymbolInstance(path=path, reference=ref or "", unit=unit))
+    return instances
 
 
 def extract_symbols(doc: Document) -> list[SchSymbol]:
@@ -92,6 +125,7 @@ def extract_symbols(doc: Document) -> list[SchSymbol]:
                 on_board=on_board,
                 pins=pins,
                 properties=properties,
+                instances=_extract_symbol_instances(sym_node),
             )
         )
     return symbols
@@ -153,6 +187,90 @@ def extract_power_ports(doc: Document) -> list[PowerPort]:
     return ports
 
 
+def extract_sheets(doc: Document) -> list[Sheet]:
+    """Extract sub-sheet references (``(sheet ...)`` blocks) from a schematic."""
+    sheets: list[Sheet] = []
+    for sheet_node in doc.root.find_all("sheet"):
+        uuid_node = sheet_node.get("uuid")
+        sheet_uuid = uuid_node.first_value if uuid_node else ""
+        position = _extract_position(sheet_node.get("at"))
+
+        size_node = sheet_node.get("size")
+        size = (0.0, 0.0)
+        if size_node:
+            sv = size_node.atom_values
+            size = (_float(sv[0]) if sv else 0.0, _float(sv[1]) if len(sv) > 1 else 0.0)
+
+        name = ""
+        file = ""
+        for prop in sheet_node.find_all("property"):
+            pn = prop.first_value
+            pv = prop.atom_values[1] if len(prop.atom_values) > 1 else ""
+            if pn == "Sheetname":
+                name = pv
+            elif pn == "Sheetfile":
+                file = pv
+
+        pins: list[SheetPin] = []
+        for pin_node in sheet_node.find_all("pin"):
+            pvals = pin_node.atom_values
+            pname = pvals[0] if pvals else ""
+            shape = pvals[1] if len(pvals) > 1 else ""
+            puuid_node = pin_node.get("uuid")
+            puuid = puuid_node.first_value if puuid_node else ""
+            pins.append(
+                SheetPin(
+                    name=pname,
+                    shape=shape,
+                    position=_extract_position(pin_node.get("at")),
+                    uuid=puuid or "",
+                )
+            )
+
+        # The sheet's page number lives in its own instances block.
+        page = ""
+        inst = sheet_node.get("instances")
+        if inst:
+            for proj in inst.find_all("project"):
+                for path_node in proj.find_all("path"):
+                    pg = path_node.get("page")
+                    if pg and pg.first_value:
+                        page = pg.first_value
+
+        sheets.append(
+            Sheet(
+                name=name,
+                file=file,
+                uuid=sheet_uuid or "",
+                position=position,
+                size=size,
+                page=page,
+                pins=pins,
+            )
+        )
+    return sheets
+
+
+def extract_hierarchical_labels(doc: Document) -> list[HierarchicalLabel]:
+    """Extract hierarchical labels (child-side ports) from a schematic."""
+    labels: list[HierarchicalLabel] = []
+    for node in doc.root.find_all("hierarchical_label"):
+        name = node.first_value or ""
+        shape_node = node.get("shape")
+        shape = shape_node.first_value if shape_node else ""
+        uuid_node = node.get("uuid")
+        luuid = uuid_node.first_value if uuid_node else ""
+        labels.append(
+            HierarchicalLabel(
+                name=name,
+                shape=shape or "",
+                position=_extract_position(node.get("at")),
+                uuid=luuid or "",
+            )
+        )
+    return labels
+
+
 def extract_schematic_summary(doc: Document) -> SchematicSummary:
     """Extract a complete schematic summary."""
     version_node = doc.root.get("version")
@@ -176,6 +294,8 @@ def extract_schematic_summary(doc: Document) -> SchematicSummary:
     wires = extract_wires(doc)
     labels = extract_labels(doc)
     power_ports = extract_power_ports(doc)
+    sheets = extract_sheets(doc)
+    hierarchical_labels = extract_hierarchical_labels(doc)
 
     return SchematicSummary(
         version=version or "",
@@ -191,4 +311,6 @@ def extract_schematic_summary(doc: Document) -> SchematicSummary:
         wires=wires,
         labels=labels,
         power_ports=power_ports,
+        sheets=sheets,
+        hierarchical_labels=hierarchical_labels,
     )

@@ -388,6 +388,70 @@ def _instance_pin_positions(
     return out
 
 
+def _placement_paths(doc: Document) -> tuple[list[str], str]:
+    """Instance paths for each placement of ``doc``'s file + the project name.
+
+    Hierarchy-aware: a reused sheet has one path per placement. Falls back to
+    the single root path ``/<root_uuid>`` when no hierarchy is loaded.
+    """
+    from .. import schematic_state
+
+    if schematic_state.hierarchy_loaded():
+        h = schematic_state.get_hierarchy()
+        paths = [
+            n.instance_path
+            for n in h.iter_nodes()
+            if n.file == str(doc.path) and not n.is_cycle and not n.missing
+        ]
+        if paths:
+            return paths, Path(h.root.file).stem
+    root_uuid_node = doc.root.get("uuid")
+    root_uuid = root_uuid_node.first_value if root_uuid_node else str(_uuid.uuid4())
+    return [f"/{root_uuid}"], (Path(doc.path).stem if doc.path else "noname")
+
+
+def _used_references(doc: Document) -> set[str]:
+    """Every reference in use — across the whole hierarchy if one is loaded."""
+    from .. import schematic_state
+
+    if schematic_state.hierarchy_loaded():
+        return {c.reference for c in schematic_state.get_hierarchy().enumerate_components()}
+    return {s.reference for s in schematic_state.get_symbols()}
+
+
+def _build_instances(doc: Document, reference: str, unit: int) -> tuple[str, list[str], str | None]:
+    """Build the ``(instances ...)`` block, assigning a distinct reference per
+    placement.
+
+    A symbol added to a reused sheet is one physical component per placement, so
+    each placement must get its own reference. The given ``reference`` is used
+    for the first placement; each additional placement gets the next free number
+    with the same prefix (unique across the whole hierarchy). Returns
+    ``(instances_text, assigned_refs, error)``.
+    """
+    from ..schema.hierarchy import next_free_reference, split_reference
+
+    paths, project_name = _placement_paths(doc)
+    used = _used_references(doc)
+    if reference in used:
+        return "", [], f"Symbol with reference '{reference}' already exists"
+
+    prefix, _ = split_reference(reference)
+    assigned = [reference]
+    used = used | {reference}
+    for _ in paths[1:]:
+        nref = next_free_reference(prefix, used)
+        assigned.append(nref)
+        used.add(nref)
+
+    path_text = " ".join(
+        f'(path "{p}" (reference {_quote_if_needed(r)}) (unit {unit}))'
+        for p, r in zip(paths, assigned, strict=True)
+    )
+    instances = f"(instances (project {_quote_if_needed(project_name)} {path_text}))"
+    return instances, assigned, None
+
+
 def _add_symbol_handler(
     lib_id: str,
     reference: str,
@@ -417,10 +481,11 @@ def _add_symbol_handler(
     _validate_reference(reference)
     _validate_value(value)
 
-    # Check for duplicate reference
-    symbols = schematic_state.get_symbols()
-    if any(s.reference == reference for s in symbols):
-        return {"error": f"Symbol with reference '{reference}' already exists"}
+    # Build the per-placement instances block (allocates distinct references
+    # across a reused sheet) and reject duplicate references hierarchy-wide.
+    instances_text, assigned_refs, inst_error = _build_instances(doc, reference, unit)
+    if inst_error:
+        return {"error": inst_error}
 
     sym_uuid = str(_uuid.uuid4())
 
@@ -446,18 +511,6 @@ def _add_symbol_handler(
     quoted_reference = _quote_if_needed(reference)
     quoted_value = _quote_if_needed(value)
     quoted_footprint = _quote_if_needed(footprint)
-
-    # The reference designator only resolves in v20231120+ schematics when the
-    # instance carries an (instances (project ...(path ...(reference ...)))) block
-    # keyed on the schematic's top-level UUID.
-    root_uuid_node = doc.root.get("uuid")
-    root_uuid = root_uuid_node.first_value if root_uuid_node else str(_uuid.uuid4())
-    project_name = Path(doc.path).stem if doc.path else "noname"
-    instances_text = (
-        f"(instances (project {_quote_if_needed(project_name)}"
-        f' (path "/{root_uuid}"'
-        f" (reference {quoted_reference}) (unit {unit}))))"
-    )
 
     sym_text = (
         f"(symbol (lib_id {quoted_lib_id}) (at {x} {y} {angle}) (unit {unit})"
@@ -489,7 +542,7 @@ def _add_symbol_handler(
     # Absolute schematic coords of each pin (for landing wires/labels).
     pin_positions = _instance_pin_positions(doc, sym_node, geometry)
 
-    return {
+    result = {
         "status": "added",
         "reference": reference,
         "uuid": sym_uuid,
@@ -499,6 +552,11 @@ def _add_symbol_handler(
         "footprint": footprint,
         "pins": pin_positions,
     }
+    # On a reused sheet the symbol exists once per placement, each with its own
+    # reference; surface them so the caller knows what was auto-assigned.
+    if len(assigned_refs) > 1:
+        result["instance_references"] = assigned_refs
+    return result
 
 
 def _add_wire_handler(
@@ -797,10 +855,13 @@ def _create_schematic_handler(
             f"Valid options: {', '.join(sorted(VALID_PAPERS))}"
         }
 
+    from ..backends.format_version import detect_format_stamps
+
+    stamps = detect_format_stamps()
     sch_uuid = str(_uuid.uuid4())
     sch_text = (
-        f'(kicad_sch (version 20231120) (generator "kicad_mcp")'
-        f' (generator_version "9.0")\n'
+        f'(kicad_sch (version {stamps.sch_version}) (generator "kicad_mcp")'
+        f' (generator_version "{stamps.generator_version}")\n'
         f'  (uuid "{sch_uuid}")\n'
         f'  (paper "{paper}")\n'
         f"  (lib_symbols)\n"

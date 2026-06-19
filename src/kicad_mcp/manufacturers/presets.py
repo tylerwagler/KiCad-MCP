@@ -9,6 +9,11 @@ Sources:
 - JLCPCB: https://jlcpcb.com/capabilities/pcb-capabilities
 - OSHPark: https://docs.oshpark.com/services/
 - PCBWay: https://www.pcbway.com/capabilities.html
+
+PROVENANCE — these are hand-transcribed manufacturer capabilities and *drift*
+as fab houses change processes. They are NOT auto-detectable. Re-check the
+source pages above when relying on the tighter rules.
+Last verified: 2026-06-18 (JLCPCB, OSH Park, PCBWay).
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # KiCad MCP — TODO
 
 ## Current State
-- 90 tools, 577 tests, 100% pass, 14 categories
+- 146 tools (9 direct + 137 routed + 4 meta), 891 tests (657 pass, 234 env-gated skips), 21 categories
 - Full featureparity with old Node.js server (which had 78% pass rate)
 - Best-in-class among 6 competing KiCad MCP repos
 - CI pipeline (GitHub Actions), integration tests, performance benchmarks
@@ -65,7 +65,9 @@
 - [ ] ODB++ export for advanced manufacturing
 
 ### Multi-Board / Hierarchy
-- [ ] Hierarchical schematic support (sub-sheets)
+- [x] Hierarchical schematic support (sub-sheets) — parse/resolve sheet trees
+  (reuse, cycles), per-instance reference resolution, navigation + sheet editing
+  tools, cross-sheet connectivity analysis + kicad-cli hierarchical netlist
 - [ ] Multi-board project management (backplane + daughter cards)
 - [ ] Connector pin mapping between boards
 
@@ -98,6 +100,5 @@
 - [x] Global response truncation safety net in execute_tool (50KB cap)
 
 ### Recent Tech Debt (from production hardening)
-- [ ] Fix kicad-cli `--format plain` validation issue - use `json` format instead
 - [ ] Add integration test for real KiCad IPC API (requires KiCad installation)
 - [ ] Improve documentation for optional dependencies (kipy, pcbnew)
