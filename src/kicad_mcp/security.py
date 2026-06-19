@@ -70,6 +70,7 @@ ALLOWED_CLI_SUBCOMMANDS = frozenset(
         "erc",
         "export",
         "render",
+        "upgrade",
         # export sub-subcommands
         "bom",
         "netlist",

@@ -80,8 +80,13 @@ class KiCadCli:
 
         raise KiCadCliNotFound("kicad-cli not found. Install KiCad 8+ or set the path manually.")
 
-    def _run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
-        """Run a kicad-cli command with timeout and error handling."""
+    def _run(self, args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
+        """Run a kicad-cli command with timeout and error handling.
+
+        ``cwd`` runs the command from a working directory so callers can pass
+        relative paths (the security validator allows relative, not absolute,
+        paths for arbitrary locations).
+        """
         from ..security import SecureSubprocess
 
         cmd = [self.cli_path] + args
@@ -92,12 +97,23 @@ class KiCadCli:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
+                cwd=cwd,
             )
             return result
         except subprocess.TimeoutExpired as e:
             raise KiCadCliError(f"kicad-cli timed out after {self.timeout}s") from e
         except FileNotFoundError as e:
             raise KiCadCliNotFound(f"kicad-cli not found at {self.cli_path}") from e
+
+    def upgrade(self, file_type: str, path: str, cwd: str | None = None) -> None:
+        """Force-upgrade a KiCad file/library to the installed format version.
+
+        ``file_type`` is one of ``pcb``, ``sch``, ``sym``, ``fp``. Footprint
+        upgrades (``fp``) require a ``.pretty`` directory rather than a file.
+        """
+        result = self._run([file_type, "upgrade", "--force", path], cwd=cwd)
+        if result.returncode != 0:
+            raise KiCadCliError(self._format_error(result, f"{file_type} upgrade failed"))
 
     def _format_error(
         self,
