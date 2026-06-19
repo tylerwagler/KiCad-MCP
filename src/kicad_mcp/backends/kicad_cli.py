@@ -574,6 +574,30 @@ class KiCadCli:
             message=f"Schematic {fmt.upper()} exported successfully",
         )
 
+    def export_netlist(self, sch_path: str, output_path: str) -> ExportResult:
+        """Export a full hierarchical netlist via ``kicad-cli sch export netlist``.
+
+        kicad-cli loads the entire sheet tree from the root schematic and
+        resolves connectivity (geometry + labels + sheet pins) itself, so the
+        result spans all sheets. Uses the default ``kicadsexpr`` format.
+        """
+        if not Path(sch_path).exists():
+            raise FileNotFoundError(f"Schematic not found: {sch_path}")
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        result = self._run(["sch", "export", "netlist", "--output", output_path, sch_path])
+        if result.returncode != 0:
+            return ExportResult(
+                success=False,
+                output_path=output_path,
+                message=self._format_error(result, "Netlist export failed"),
+            )
+        return ExportResult(
+            success=True,
+            output_path=output_path,
+            message="Netlist exported successfully",
+        )
+
     def export_pos(
         self,
         board_path: str,

@@ -46,6 +46,7 @@ EXPORT_EXTENSIONS = frozenset(
         ".xao",
         ".dsn",
         ".ses",
+        ".net",
     }
 )
 

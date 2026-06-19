@@ -270,3 +270,59 @@ class TestHierarchyEditTools:
         assert r["sheet_count"] == 4  # root + 2 + io
         refs = sorted(c["reference"] for c in H._list_hierarchical_symbols_handler()["components"])
         assert "C9" in refs
+
+
+# ── Phase 4: cross-sheet connectivity + netlist ──────────────────────
+
+
+class TestCrossSheetNets:
+    def test_matched_ports(self, loaded):
+        cs = H._analyze_cross_sheet_nets_handler()
+        # Fixture: sheet pin "IN" on both placements matches child hier label.
+        assert len(cs["hierarchical_ports"]) == 2
+        assert all(p["status"] == "matched" for p in cs["hierarchical_ports"])
+        assert cs["port_mismatches"] == []
+
+    def test_missing_child_label_flagged(self, loaded):
+        tree = H._get_sheet_hierarchy_handler()
+        sheet_uuid = tree["children"][0]["sheet_uuid"]
+        H._add_sheet_pin_handler(sheet_uuid, "EXTRA", "input", 50, 60)
+        cs = H._analyze_cross_sheet_nets_handler()
+        mm = [m for m in cs["port_mismatches"] if m["name"] == "EXTRA"]
+        assert mm and mm[0]["status"] == "missing_child_label"
+
+    def test_global_net_spans_sheets(self, tmp_path):
+        # Inject a global label into the reused child → appears in both placements.
+        import shutil
+
+        for f in ("root.kicad_sch", "child.kicad_sch"):
+            shutil.copy(FIXTURES / f, tmp_path / f)
+        child = tmp_path / "child.kicad_sch"
+        txt = child.read_text().replace(
+            '(hierarchical_label "IN"',
+            '(global_label "GBL" (shape input) (at 10 10 0)'
+            " (effects (font (size 1.27 1.27)))"
+            ' (uuid "abababab-abab-abab-abab-abababababab"))\n'
+            '\t(hierarchical_label "IN"',
+        )
+        child.write_text(txt)
+        H._open_hierarchy_handler(str(tmp_path / "root.kicad_sch"))
+        cs = H._analyze_cross_sheet_nets_handler()
+        gbl = [g for g in cs["global_nets"] if g["name"] == "GBL"]
+        assert gbl and gbl[0]["kind"] == "global_label"
+        assert gbl[0]["sheet_count"] == 2  # one per reused placement
+        assert any(g["name"] == "GBL" for g in cs["cross_sheet_global_nets"])
+
+
+@pytest.mark.skipif(
+    not __import__("kicad_mcp.backends.kicad_cli", fromlist=["KiCadCli"]).KiCadCli.is_available(),
+    reason="kicad-cli not installed",
+)
+class TestHierarchicalNetlist:
+    def test_export_netlist(self, loaded, tmp_path):
+        out = str(tmp_path / "h.net")
+        r = H._export_hierarchical_netlist_handler(out)
+        assert r["status"] == "ok"
+        assert r["component_count"] >= 1
+        assert r["net_count"] >= 1
+        assert Path(out).exists()

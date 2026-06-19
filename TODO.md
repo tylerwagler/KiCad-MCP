@@ -65,7 +65,9 @@
 - [ ] ODB++ export for advanced manufacturing
 
 ### Multi-Board / Hierarchy
-- [ ] Hierarchical schematic support (sub-sheets)
+- [x] Hierarchical schematic support (sub-sheets) — parse/resolve sheet trees
+  (reuse, cycles), per-instance reference resolution, navigation + sheet editing
+  tools, cross-sheet connectivity analysis + kicad-cli hierarchical netlist
 - [ ] Multi-board project management (backplane + daughter cards)
 - [ ] Connector pin mapping between boards
 

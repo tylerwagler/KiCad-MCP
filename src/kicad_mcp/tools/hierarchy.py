@@ -362,6 +362,82 @@ def _save_hierarchy_handler() -> dict[str, Any]:
     return {"status": "saved", "count": len(saved), "files": saved}
 
 
+# ── Phase 4: cross-sheet connectivity + netlist ──────────────────────
+
+
+def _analyze_cross_sheet_nets_handler() -> dict[str, Any]:
+    """Analyse cross-sheet connectivity for the loaded hierarchy (no KiCad).
+
+    Reports global nets (global labels + power) and the sheet-pin/hierarchical-
+    label crossings, flagging name mismatches between parent and child sides.
+    """
+    from .. import schematic_state
+    from ..schema.connectivity import analyze_cross_sheet
+
+    return analyze_cross_sheet(schematic_state.get_hierarchy())
+
+
+def _export_hierarchical_netlist_handler(output_path: str | None = None) -> dict[str, Any]:
+    """Export a full hierarchical netlist via kicad-cli and summarise it.
+
+    kicad-cli resolves connectivity across the entire sheet tree (geometry +
+    labels + sheet pins), so this is the authoritative netlist. Requires KiCad.
+
+    Args:
+        output_path: Where to write the .net file. Defaults to the root
+            schematic's name with a .net extension.
+    """
+    from .. import schematic_state
+    from ..backends.kicad_cli import KiCadCli, KiCadCliError, KiCadCliNotFound
+
+    root_file = schematic_state.get_hierarchy().root.file
+    try:
+        cli = KiCadCli()
+    except KiCadCliNotFound:
+        return {"error": "kicad-cli not found. Install KiCad to export a netlist."}
+
+    out = output_path or str(Path(root_file).with_suffix(".net"))
+    if not out.endswith(".net"):
+        out += ".net"
+    try:
+        result = cli.export_netlist(root_file, out)
+    except (KiCadCliError, FileNotFoundError) as exc:
+        return {"error": f"Netlist export failed: {exc}"}
+    if not result.success:
+        return {"error": result.message}
+
+    # Summarise the kicadsexpr netlist.
+    from ..sexp import Document
+
+    doc = Document.load(out)
+    comps_node = doc.root.find("components")
+    nets_node = doc.root.find("nets")
+    comp_count = len(comps_node.find_all("comp")) if comps_node else 0
+    nets: list[dict[str, Any]] = []
+    if nets_node:
+        for net in nets_node.find_all("net"):
+            name_node = net.get("name")
+            refs: list[str | None] = []
+            for node in net.find_all("node"):
+                ref_node = node.get("ref")
+                if ref_node is not None:
+                    refs.append(ref_node.first_value)
+            nets.append(
+                {
+                    "name": name_node.first_value if name_node else "",
+                    "node_count": len(refs),
+                    "refs": refs,
+                }
+            )
+    return {
+        "status": "ok",
+        "netlist_path": out,
+        "component_count": comp_count,
+        "net_count": len(nets),
+        "nets": nets,
+    }
+
+
 # ── Registration ─────────────────────────────────────────────────────
 
 register_tool(
@@ -487,5 +563,32 @@ register_tool(
     description="Save every loaded sheet document in the hierarchy to disk.",
     parameters={},
     handler=_save_hierarchy_handler,
+    category="hierarchy",
+)
+
+register_tool(
+    name="analyze_cross_sheet_nets",
+    description=(
+        "Analyse cross-sheet connectivity (global nets + sheet-pin/hierarchical-label "
+        "crossings) without KiCad; flags parent/child port mismatches."
+    ),
+    parameters={},
+    handler=_analyze_cross_sheet_nets_handler,
+    category="hierarchy",
+)
+
+register_tool(
+    name="export_hierarchical_netlist",
+    description=(
+        "Export the authoritative full hierarchical netlist via kicad-cli and "
+        "summarise components and nets across all sheets."
+    ),
+    parameters={
+        "output_path": {
+            "type": "string",
+            "description": "Optional .net output path. Defaults next to the root sheet.",
+        },
+    },
+    handler=_export_hierarchical_netlist_handler,
     category="hierarchy",
 )
