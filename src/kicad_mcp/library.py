@@ -40,21 +40,28 @@ def _kicad_env_paths() -> dict[str, Path]:
         if not fp_dir.exists():
             fp_dir = base / "footprints"
         if sym_dir.exists():
+            paths["KICAD10_SYMBOL_DIR"] = sym_dir
             paths["KICAD9_SYMBOL_DIR"] = sym_dir
             paths["KICAD8_SYMBOL_DIR"] = sym_dir
         if fp_dir.exists():
+            paths["KICAD10_FOOTPRINT_DIR"] = fp_dir
             paths["KICAD9_FOOTPRINT_DIR"] = fp_dir
             paths["KICAD8_FOOTPRINT_DIR"] = fp_dir
         if sym_dir.exists() or fp_dir.exists():
             break
 
     # Also check environment variables
-    for var in ("KICAD9_SYMBOL_DIR", "KICAD8_SYMBOL_DIR", "KICAD_SYMBOL_DIR"):
+    for var in ("KICAD10_SYMBOL_DIR", "KICAD9_SYMBOL_DIR", "KICAD8_SYMBOL_DIR", "KICAD_SYMBOL_DIR"):
         val = os.environ.get(var)
         if val and Path(val).exists():
             paths[var] = Path(val)
             break
-    for var in ("KICAD9_FOOTPRINT_DIR", "KICAD8_FOOTPRINT_DIR", "KICAD_FOOTPRINT_DIR"):
+    for var in (
+        "KICAD10_FOOTPRINT_DIR",
+        "KICAD9_FOOTPRINT_DIR",
+        "KICAD8_FOOTPRINT_DIR",
+        "KICAD_FOOTPRINT_DIR",
+    ):
         val = os.environ.get(var)
         if val and Path(val).exists():
             paths[var] = Path(val)
@@ -80,12 +87,22 @@ def _user_config_dir() -> Path:
         base = Path.home() / "Library" / "Preferences"
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    # Try KiCad 9 first, then 8
-    for ver in ("9.0", "8.0"):
-        d = base / "kicad" / ver
-        if d.exists():
-            return d
-    return base / "kicad" / "9.0"
+    kicad_base = base / "kicad"
+    # Pick the highest-numbered installed version dir (e.g. 10.0 over 9.0), so a
+    # new KiCad major (config at ~/.config/kicad/<ver>/) is found without a code
+    # change. Prefer a dir that actually has a sym-lib-table.
+    if kicad_base.is_dir():
+        versions = sorted(
+            (d for d in kicad_base.iterdir() if d.is_dir() and re.fullmatch(r"\d+\.\d+", d.name)),
+            key=lambda d: tuple(int(p) for p in d.name.split(".")),
+            reverse=True,
+        )
+        for d in versions:
+            if (d / "sym-lib-table").exists():
+                return d
+        if versions:
+            return versions[0]
+    return kicad_base / "9.0"
 
 
 def discover_lib_tables() -> dict[str, list[LibraryEntry]]:
@@ -112,8 +129,24 @@ def discover_lib_tables() -> dict[str, list[LibraryEntry]]:
     return result
 
 
-def _parse_lib_table(path: Path, env: dict[str, Path]) -> list[LibraryEntry]:
-    """Parse a sym-lib-table or fp-lib-table file."""
+def _parse_lib_table(
+    path: Path, env: dict[str, Path], _visited: set[str] | None = None
+) -> list[LibraryEntry]:
+    """Parse a sym-lib-table or fp-lib-table file.
+
+    KiCad 10 introduced ``(type "Table")`` entries whose URI points at another
+    lib-table file (the stock global table now nests the default library set this
+    way). Those are followed and their entries spliced in, so callers see the real
+    leaf libraries (e.g. ``power``) instead of an opaque "Table" pointer. A visited
+    set guards against self-referential cycles.
+    """
+    if _visited is None:
+        _visited = set()
+    real_path = str(Path(path).resolve())
+    if real_path in _visited:
+        return []
+    _visited.add(real_path)
+
     doc = Document.load(str(path))
     entries: list[LibraryEntry] = []
     for lib_node in doc.root.find_all("lib"):
@@ -128,6 +161,12 @@ def _parse_lib_table(path: Path, env: dict[str, Path]) -> list[LibraryEntry]:
         descr = descr_node.first_value if descr_node else ""
 
         resolved = str(_resolve_uri(uri_raw or "", env))
+        if (lib_type or "").lower() == "table":
+            # Nested lib-table: recurse and inline its leaf entries.
+            nested = Path(resolved)
+            if nested.exists():
+                entries.extend(_parse_lib_table(nested, env, _visited))
+            continue
         entries.append(
             LibraryEntry(
                 name=name or "",

@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from kicad_mcp.library import (
+    _kicad_env_paths,
+    _parse_lib_table,
+    _user_config_dir,
     discover_lib_tables,
     get_footprint_details,
     list_footprints_in_library,
@@ -193,6 +196,71 @@ class TestSearchFootprints:
         libs = [LibraryEntry("Resistor_SMD", "KiCad", str(RESISTOR_SMD_DIR), "")]
         results = search_footprints("xyznonexistent99999", libraries=libs)
         assert len(results) == 0
+
+
+class TestKiCad10LibTables:
+    """KiCad 10 lib-table handling — runs without KiCad installed (hermetic)."""
+
+    def test_parse_follows_nested_table_entry(self, tmp_path: Path) -> None:
+        # KiCad 10's global sym-lib-table nests the stock libs behind a
+        # (type "Table") entry pointing at another lib-table file.
+        leaf = tmp_path / "stock-sym-lib-table"
+        leaf.write_text(
+            "(sym_lib_table\n"
+            '  (lib (name "power") (type "KiCad")'
+            ' (uri "${KICAD10_SYMBOL_DIR}/power.kicad_sym") (descr "Power"))\n'
+            ")",
+            encoding="utf-8",
+        )
+        top = tmp_path / "sym-lib-table"
+        top.write_text(
+            "(sym_lib_table\n"
+            f'  (lib (name "KiCad") (type "Table") (uri "{leaf}") (descr "nested"))\n'
+            ")",
+            encoding="utf-8",
+        )
+        env = {"KICAD10_SYMBOL_DIR": tmp_path}
+        entries = _parse_lib_table(top, env)
+        names = [e.name for e in entries]
+        # The opaque "Table" pointer is replaced by its leaf libraries.
+        assert names == ["power"]
+        assert entries[0].uri == str(tmp_path / "power.kicad_sym")
+
+    def test_parse_guards_against_table_cycle(self, tmp_path: Path) -> None:
+        a = tmp_path / "sym-lib-table"
+        a.write_text(
+            f'(sym_lib_table (lib (name "B") (type "Table") (uri "{tmp_path / "b"}")))',
+            encoding="utf-8",
+        )
+        b = tmp_path / "b"
+        b.write_text(
+            f'(sym_lib_table (lib (name "A") (type "Table") (uri "{a}")))',
+            encoding="utf-8",
+        )
+        # Must terminate rather than recurse forever.
+        assert _parse_lib_table(a, {}) == []
+
+    def test_user_config_dir_prefers_highest_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import platform
+
+        if platform.system() not in ("Linux",):
+            pytest.skip("XDG_CONFIG_HOME path is Linux-only")
+        for ver in ("8.0", "9.0", "10.0"):
+            d = tmp_path / "kicad" / ver
+            d.mkdir(parents=True)
+            (d / "sym-lib-table").write_text("(sym_lib_table)", encoding="utf-8")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        assert _user_config_dir().name == "10.0"
+
+    def test_env_paths_expose_kicad10_keys(self) -> None:
+        paths = _kicad_env_paths()
+        # When stock symbols are present, the KICAD10_* alias must be set so KiCad
+        # 10 URIs (${KICAD10_SYMBOL_DIR}/...) resolve.
+        if "KICAD9_SYMBOL_DIR" in paths:
+            assert "KICAD10_SYMBOL_DIR" in paths
+            assert paths["KICAD10_SYMBOL_DIR"] == paths["KICAD9_SYMBOL_DIR"]
 
 
 @skip_no_kicad
