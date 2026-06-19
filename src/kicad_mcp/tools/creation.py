@@ -78,6 +78,7 @@ def _create_footprint_handler(
         description: Optional description.
         tags: Optional space-separated tags.
     """
+    from ..backends.format_version import detect_format_stamps
     from ..security import SecurityError, get_validator
 
     try:
@@ -97,10 +98,12 @@ def _create_footprint_handler(
     # through_hole if any pad needs a drill, else smd.
     attr = "through_hole" if any(p.get("type") in ("thru_hole",) for p in pads) else "smd"
 
+    stamps = detect_format_stamps()
     text = (
         f"(footprint {_quote_if_needed(name)}\n"
-        f"  (version 20240108)\n"
+        f"  (version {stamps.footprint_version})\n"
         f'  (generator "kicad_mcp")\n'
+        f'  (generator_version "{stamps.generator_version}")\n'
         f'  (layer "F.Cu")\n'
         f"  (descr {_quote_if_needed(description)})\n"
         f"  (tags {_quote_if_needed(tags)})\n"
@@ -219,6 +222,7 @@ def _create_symbol_handler(
         footprint: Optional default footprint (e.g., "lib:FP").
         description: Optional description.
     """
+    from ..backends.format_version import detect_format_stamps
     from ..security import SecurityError, get_validator
 
     try:
@@ -265,11 +269,12 @@ def _create_symbol_handler(
         idx = existing.rstrip().rfind(")")
         new_text = existing.rstrip()[:idx] + sym_text + "\n)\n"
     else:
+        stamps = detect_format_stamps()
         new_text = (
             f"(kicad_symbol_lib\n"
-            f"  (version 20231120)\n"
+            f"  (version {stamps.symbol_version})\n"
             f'  (generator "kicad_mcp")\n'
-            f'  (generator_version "9.0")\n'
+            f'  (generator_version "{stamps.generator_version}")\n'
             f"{sym_text}\n"
             f")\n"
         )

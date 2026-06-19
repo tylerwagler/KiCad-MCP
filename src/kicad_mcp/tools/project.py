@@ -11,17 +11,30 @@ from .registry import register_tool
 
 # ── Templates ──────────────────────────────────────────────────────
 
+# Mirrors a KiCad 10 .kicad_pro. Top-level "meta".version drives the
+# upgrade-on-load prompt; the per-section "meta".version values and the three
+# KiCad-10-era sections (component_class_settings, erc, time_domain_parameters)
+# keep the file structurally current. Missing leaf settings are merged from
+# KiCad's defaults on load, so these stubs stay minimal rather than embedding
+# the full ERC pin-map / rule-severity matrices.
 _KICAD_PRO_TEMPLATE: dict[str, Any] = {
     "board": {"design_settings": {"defaults": {"board_outline_line_width": 0.05}}},
     "boards": [],
+    "component_class_settings": {
+        "assignments": [],
+        "meta": {"version": 0},
+        "sheet_component_classes": {"enabled": False},
+    },
     "cvpcb": {"equivalence_files": []},
+    "erc": {"erc_exclusions": [], "meta": {"version": 0}},
     "libraries": {"pinned_footprint_libs": [], "pinned_symbol_libs": []},
-    "meta": {"filename": "", "version": 1},
+    "meta": {"filename": "", "version": 3},
     "net_settings": {"classes": []},
     "pcbnew": {"last_paths": {"gencad": "", "idf": "", "netlist": "", "vrml": ""}},
     "schematic": {"legacy_lib_list": []},
     "sheets": [],
     "text_variables": {},
+    "time_domain_parameters": {"delay_profiles_user_defined": [], "meta": {"version": 0}},
 }
 
 
@@ -30,8 +43,12 @@ def _minimal_kicad_pcb(
     height: float | None = None,
 ) -> str:
     """Generate a minimal .kicad_pcb S-expression."""
+    from ..backends.format_version import detect_format_stamps
+
+    stamps = detect_format_stamps()
     lines = [
-        '(kicad_pcb (version 20241229) (generator "kicad_mcp") (generator_version "9.0")',
+        f'(kicad_pcb (version {stamps.pcb_version}) (generator "kicad_mcp")'
+        f' (generator_version "{stamps.generator_version}")',
         "  (general (thickness 1.6) (legacy_teardrops no))",
         '  (paper "A4")',
         "  (layers",
@@ -86,9 +103,13 @@ def _minimal_kicad_pcb(
 
 def _minimal_kicad_sch() -> str:
     """Generate a minimal .kicad_sch S-expression."""
+    from ..backends.format_version import detect_format_stamps
+
+    stamps = detect_format_stamps()
     sch_uuid = str(uuid.uuid4())
     return (
-        f'(kicad_sch (version 20231120) (generator "kicad_mcp") (generator_version "9.0")\n'
+        f'(kicad_sch (version {stamps.sch_version}) (generator "kicad_mcp")'
+        f' (generator_version "{stamps.generator_version}")\n'
         f'  (uuid "{sch_uuid}")\n'
         f'  (paper "A4")\n'
         f"  (lib_symbols)\n"

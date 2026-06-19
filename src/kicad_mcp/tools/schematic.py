@@ -797,10 +797,13 @@ def _create_schematic_handler(
             f"Valid options: {', '.join(sorted(VALID_PAPERS))}"
         }
 
+    from ..backends.format_version import detect_format_stamps
+
+    stamps = detect_format_stamps()
     sch_uuid = str(_uuid.uuid4())
     sch_text = (
-        f'(kicad_sch (version 20231120) (generator "kicad_mcp")'
-        f' (generator_version "9.0")\n'
+        f'(kicad_sch (version {stamps.sch_version}) (generator "kicad_mcp")'
+        f' (generator_version "{stamps.generator_version}")\n'
         f'  (uuid "{sch_uuid}")\n'
         f'  (paper "{paper}")\n'
         f"  (lib_symbols)\n"
