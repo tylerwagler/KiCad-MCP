@@ -11,6 +11,7 @@ from . import (  # noqa: F401
     drc,
     export,
     freerouting,
+    hierarchy,
     ipc_sync,
     jlcpcb,
     library,

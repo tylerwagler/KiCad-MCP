@@ -388,6 +388,40 @@ def _instance_pin_positions(
     return out
 
 
+def _symbol_instances_text(doc: Document, quoted_reference: str, unit: int) -> str:
+    """Build the ``(instances ...)`` block for a symbol added to ``doc``.
+
+    The reference designator only resolves in v20231120+ schematics when the
+    instance carries an ``(instances (project (path ... (reference ...))))``
+    block keyed on the hierarchical path. When a hierarchy is loaded, emit one
+    path per placement of this document's file — so a symbol added to a reused
+    sheet appears in every placement. Otherwise emit the single root path
+    ``/<root_uuid>`` (unchanged single-file behaviour).
+    """
+    from .. import schematic_state
+
+    paths: list[str] = []
+    project_name = "noname"
+    if schematic_state.hierarchy_loaded():
+        h = schematic_state.get_hierarchy()
+        project_name = Path(h.root.file).stem
+        paths = [
+            n.instance_path
+            for n in h.iter_nodes()
+            if n.file == str(doc.path) and not n.is_cycle and not n.missing
+        ]
+    if not paths:
+        root_uuid_node = doc.root.get("uuid")
+        root_uuid = root_uuid_node.first_value if root_uuid_node else str(_uuid.uuid4())
+        paths = [f"/{root_uuid}"]
+        if doc.path:
+            project_name = Path(doc.path).stem
+    path_text = " ".join(
+        f'(path "{p}" (reference {quoted_reference}) (unit {unit}))' for p in paths
+    )
+    return f"(instances (project {_quote_if_needed(project_name)} {path_text}))"
+
+
 def _add_symbol_handler(
     lib_id: str,
     reference: str,
@@ -447,17 +481,7 @@ def _add_symbol_handler(
     quoted_value = _quote_if_needed(value)
     quoted_footprint = _quote_if_needed(footprint)
 
-    # The reference designator only resolves in v20231120+ schematics when the
-    # instance carries an (instances (project ...(path ...(reference ...)))) block
-    # keyed on the schematic's top-level UUID.
-    root_uuid_node = doc.root.get("uuid")
-    root_uuid = root_uuid_node.first_value if root_uuid_node else str(_uuid.uuid4())
-    project_name = Path(doc.path).stem if doc.path else "noname"
-    instances_text = (
-        f"(instances (project {_quote_if_needed(project_name)}"
-        f' (path "/{root_uuid}"'
-        f" (reference {quoted_reference}) (unit {unit}))))"
-    )
+    instances_text = _symbol_instances_text(doc, quoted_reference, unit)
 
     sym_text = (
         f"(symbol (lib_id {quoted_lib_id}) (at {x} {y} {angle}) (unit {unit})"

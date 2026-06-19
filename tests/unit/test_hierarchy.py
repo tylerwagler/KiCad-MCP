@@ -6,6 +6,9 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
+import kicad_mcp.tools  # noqa: F401  (registers tools)
 from kicad_mcp.schema.extract_schematic import (
     extract_hierarchical_labels,
     extract_schematic_summary,
@@ -14,6 +17,8 @@ from kicad_mcp.schema.extract_schematic import (
 )
 from kicad_mcp.schema.hierarchy import build_hierarchy
 from kicad_mcp.sexp import Document
+from kicad_mcp.tools import hierarchy as H
+from kicad_mcp.tools import schematic as S
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "hierarchy"
 ROOT = str(FIXTURES / "root.kicad_sch")
@@ -143,3 +148,125 @@ class TestBuildHierarchy:
             # cycle node has no further children (recursion stopped)
             cyc = next(n for n in h.iter_nodes() if n.is_cycle)
             assert cyc.children == []
+
+
+# ── Phase 3: tools (read + edit) ─────────────────────────────────────
+
+
+@pytest.fixture
+def loaded(tmp_path):
+    """Copy the fixture to a temp dir and open it as a hierarchy."""
+    import shutil
+
+    for f in ("root.kicad_sch", "child.kicad_sch"):
+        shutil.copy(FIXTURES / f, tmp_path / f)
+    root = str(tmp_path / "root.kicad_sch")
+    H._open_hierarchy_handler(root)
+    return tmp_path, root
+
+
+class TestHierarchyReadTools:
+    def test_open_hierarchy(self, loaded):
+        _, root = loaded
+        r = H._open_hierarchy_handler(root)
+        assert r["status"] == "ok"
+        assert r["sheet_count"] == 3
+        assert r["component_count"] == 2
+        assert r["missing_sheets"] == []
+
+    def test_list_hierarchical_symbols(self, loaded):
+        comps = H._list_hierarchical_symbols_handler()["components"]
+        assert sorted(c["reference"] for c in comps) == ["R1", "R2"]
+
+    def test_list_sheets(self, loaded):
+        sheets = H._list_sheets_handler()
+        assert sheets["count"] == 2
+        assert {s["name"] for s in sheets["sheets"]} == {"amp_left", "amp_right"}
+
+    def test_select_sheet(self, loaded):
+        tree = H._get_sheet_hierarchy_handler()
+        left = tree["children"][0]["instance_path"]
+        r = H._select_sheet_handler(left)
+        assert r["status"] == "ok"
+        assert r["sheet"] in ("amp_left", "amp_right")
+
+    def test_select_bad_path(self, loaded):
+        with pytest.raises(RuntimeError):
+            H._select_sheet_handler("/nope")
+
+
+class TestHierarchyEditTools:
+    def test_add_symbol_to_reused_sheet_gets_all_paths(self, loaded):
+        tree = H._get_sheet_hierarchy_handler()
+        H._select_sheet_handler(tree["children"][0]["instance_path"])
+        res = S._add_symbol_handler("Device:C", "C1", "100nF", 60, 40)
+        assert res["status"] == "added"
+        # The added symbol must carry one instance path per placement (2).
+        comps = H._list_hierarchical_symbols_handler()["components"]
+        c1 = [c for c in comps if c["reference"] == "C1"]
+        assert len(c1) == 2  # appears in both reused placements
+
+    def test_add_hierarchical_label(self, loaded):
+        tree = H._get_sheet_hierarchy_handler()
+        H._select_sheet_handler(tree["children"][0]["instance_path"])
+        r = H._add_hierarchical_label_handler("OUT", "output", 30, 50)
+        assert r["status"] == "added"
+        hl = H._list_sheets_handler  # noqa: F841
+        from kicad_mcp import schematic_state as st
+
+        labels = extract_hierarchical_labels(st.get_document())
+        assert any(lbl.name == "OUT" and lbl.shape == "output" for lbl in labels)
+
+    def test_add_hierarchical_label_bad_shape(self, loaded):
+        assert "error" in H._add_hierarchical_label_handler("X", "bogus", 0, 0)
+
+    def test_add_sheet_creates_child(self, loaded):
+        tmp, root = loaded
+        r = H._add_sheet_handler(
+            "power",
+            "power.kicad_sch",
+            140,
+            50,
+            30,
+            20,
+            pins=[{"name": "VCC", "shape": "input"}, {"name": "GND", "shape": "input"}],
+        )
+        assert r["status"] == "added"
+        assert (tmp / "power.kicad_sch").exists()
+        # child carries matching hierarchical labels
+        pw = (tmp / "power.kicad_sch").read_text()
+        assert "VCC" in pw and "GND" in pw and "hierarchical_label" in pw
+        # parent now lists 3 sheets
+        assert H._list_sheets_handler()["count"] == 3
+
+    def test_add_sheet_pin(self, loaded):
+        tree = H._get_sheet_hierarchy_handler()
+        sheet_uuid = tree["children"][0]["sheet_uuid"]
+        r = H._add_sheet_pin_handler(sheet_uuid, "EN", "input", 50, 60)
+        assert r["status"] == "added"
+        from kicad_mcp import schematic_state as st
+
+        sheets = extract_sheets(st.get_document())
+        target = next(s for s in sheets if s.uuid == sheet_uuid)
+        assert any(p.name == "EN" for p in target.pins)
+
+    def test_remove_sheet(self, loaded):
+        tree = H._get_sheet_hierarchy_handler()
+        sheet_uuid = tree["children"][1]["sheet_uuid"]
+        r = H._remove_sheet_handler(sheet_uuid)
+        assert r["status"] == "removed"
+        assert H._list_sheets_handler()["count"] == 1
+
+    def test_save_and_reopen_roundtrip(self, loaded):
+        tmp, root = loaded
+        tree = H._get_sheet_hierarchy_handler()
+        H._select_sheet_handler(tree["children"][0]["instance_path"])
+        S._add_symbol_handler("Device:C", "C9", "1uF", 60, 40)
+        H._select_sheet_handler(tree["instance_path"])  # back to root
+        H._add_sheet_handler("io", "io.kicad_sch", 140, 50)
+        H._save_hierarchy_handler()
+        # Reopen from disk and confirm persistence.
+        r = H._open_hierarchy_handler(root)
+        assert r["sheet_count"] == 4  # root + 2 + io
+        refs = sorted(c["reference"] for c in H._list_hierarchical_symbols_handler()["components"])
+        assert "C9" in refs
