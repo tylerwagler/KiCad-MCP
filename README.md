@@ -2,7 +2,7 @@
 
 AI-assisted PCB design through the [Model Context Protocol](https://modelcontextprotocol.io). Analyze, modify, route, verify, and export KiCad boards — all from your AI assistant.
 
-**133 tools** | **854 tests (621 pass, 233 env-gated skips)** | **Pure Python, zero KiCad dependency for reads**
+**146 tools** | **891 tests (657 pass, 234 env-gated skips)** | **Pure Python, zero KiCad dependency for reads**
 
 ## What It Does
 
@@ -66,10 +66,10 @@ uv run kicad-mcp
 
 ### Two-Tier Tool Router
 
-Not all 133 tools are dumped into the LLM context. Instead:
+Not all 146 tools are dumped into the LLM context. Instead:
 
 - **9 direct tools** are always visible (open project, start session, etc.)
-- **124 routed tools** are discoverable via 4 meta-tools: `list_tool_categories`, `get_category_tools`, `execute_tool`, `search_tools`
+- **137 routed tools** are discoverable via 4 meta-tools: `list_tool_categories`, `get_category_tools`, `execute_tool`, `search_tools`
 
 This reduces LLM context usage by ~70%.
 
@@ -93,7 +93,7 @@ The AI can preview changes before applying, undo individual operations, and roll
 
 Following the full MCP specification:
 
-- **Tools** — Actions that modify state (133 tools)
+- **Tools** — Actions that modify state (146 tools)
 - **Resources** — Read-only board data (component list, net map, board summary)
 - **Prompts** — Conversation templates (DRC troubleshooting, design review, placement guidance)
 
