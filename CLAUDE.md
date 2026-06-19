@@ -33,10 +33,10 @@ uv run mypy src/
 
 ### Two-Tier Tool System (Tool Router Pattern)
 
-The server exposes 75 tools but **does NOT register them all directly with MCP**. Instead:
+The server exposes 133 tools but **does NOT register them all directly with MCP**. Instead:
 
-- **Direct tools** (8): Always visible to the LLM — `open_project`, `get_board_info`, `list_components`, `find_component`, `start_session`, `commit_session`, `list_libraries`, `run_drc`
-- **Routed tools** (67): Discoverable via 4 meta-tools: `list_tool_categories`, `get_category_tools`, `execute_tool`, `search_tools`
+- **Direct tools** (9): Always visible to the LLM — `open_project`, `get_board_info`, `list_components`, `find_component`, `start_session`, `commit_session`, `list_libraries`, `run_drc`, `open_schematic`
+- **Routed tools** (124): Discoverable via 4 meta-tools: `list_tool_categories`, `get_category_tools`, `execute_tool`, `search_tools`
 
 This reduces LLM context usage by ~70%. All tools are registered in a **single unified registry** (`tools/registry.py`) with `ToolSpec` dataclasses. The `direct=True` flag controls which tier a tool lives in.
 

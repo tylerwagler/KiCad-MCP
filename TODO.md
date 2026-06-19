@@ -1,7 +1,7 @@
 # KiCad MCP — TODO
 
 ## Current State
-- 90 tools, 577 tests, 100% pass, 14 categories
+- 133 tools (9 direct + 124 routed + 4 meta), 854 tests (621 pass, 233 env-gated skips), 20 categories
 - Full featureparity with old Node.js server (which had 78% pass rate)
 - Best-in-class among 6 competing KiCad MCP repos
 - CI pipeline (GitHub Actions), integration tests, performance benchmarks
@@ -98,6 +98,5 @@
 - [x] Global response truncation safety net in execute_tool (50KB cap)
 
 ### Recent Tech Debt (from production hardening)
-- [ ] Fix kicad-cli `--format plain` validation issue - use `json` format instead
 - [ ] Add integration test for real KiCad IPC API (requires KiCad installation)
 - [ ] Improve documentation for optional dependencies (kipy, pcbnew)
