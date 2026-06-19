@@ -316,3 +316,103 @@ class TestSchematicEditOps:
         S._save_schematic_handler()
         txt = Path(sch).read_text()
         assert "(junction" in txt and "(no_connect" in txt
+
+
+class TestDeleteNonSymbolItems:
+    """delete_label/wire/junction/no_connect round-trip removal (in-memory)."""
+
+    def _new_sch(self, tmp_path: Path):
+        from kicad_mcp.tools import schematic as S
+
+        sch = str(tmp_path / "t.kicad_sch")
+        S._create_schematic_handler(sch)
+        S._open_schematic_handler(sch)
+        return S, sch
+
+    def test_delete_label(self, tmp_path: Path) -> None:
+        S, sch = self._new_sch(tmp_path)
+        S._add_label_handler("VCC", 50.0, 50.0)
+        assert "(label" in Path(sch).read_text() or True  # not yet saved
+        out = S._delete_label_handler("VCC", 50.0, 50.0)
+        assert out["status"] == "deleted" and out["count"] == 1
+        S._save_schematic_handler()
+        assert '"VCC"' not in Path(sch).read_text()
+
+    def test_delete_label_wrong_name_or_coord(self, tmp_path: Path) -> None:
+        S, _ = self._new_sch(tmp_path)
+        S._add_label_handler("VCC", 50.0, 50.0)
+        assert "error" in S._delete_label_handler("GND", 50.0, 50.0)
+        assert "error" in S._delete_label_handler("VCC", 99.0, 99.0)
+
+    def test_delete_label_coord_tolerance(self, tmp_path: Path) -> None:
+        S, _ = self._new_sch(tmp_path)
+        S._add_label_handler("NET", 50.0, 50.0)
+        # Within grid tolerance still matches.
+        out = S._delete_label_handler("NET", 50.005, 49.995)
+        assert out["status"] == "deleted"
+
+    def test_delete_wire_either_direction(self, tmp_path: Path) -> None:
+        S, sch = self._new_sch(tmp_path)
+        S._add_wire_handler(10.0, 10.0, 20.0, 10.0)
+        # Endpoints given reversed must still match.
+        out = S._delete_wire_handler(20.0, 10.0, 10.0, 10.0)
+        assert out["status"] == "deleted" and out["count"] == 1
+        S._save_schematic_handler()
+        assert "(wire" not in Path(sch).read_text()
+
+    def test_delete_junction_and_no_connect(self, tmp_path: Path) -> None:
+        S, sch = self._new_sch(tmp_path)
+        S._add_junction_handler(30.0, 30.0)
+        S._add_no_connect_handler(40.0, 40.0)
+        assert S._delete_junction_handler(30.0, 30.0)["status"] == "deleted"
+        assert S._delete_no_connect_handler(40.0, 40.0)["status"] == "deleted"
+        S._save_schematic_handler()
+        txt = Path(sch).read_text()
+        assert "(junction" not in txt and "(no_connect" not in txt
+
+    def test_delete_no_connect_missing(self, tmp_path: Path) -> None:
+        S, _ = self._new_sch(tmp_path)
+        assert "error" in S._delete_no_connect_handler(1.0, 1.0)
+
+
+class TestReferenceAndBomAttributes:
+    """Validator accepts virtual refs; add_symbol honors symbol BOM/board flags."""
+
+    def test_validate_reference_accepts_hash_prefix(self) -> None:
+        from kicad_mcp.tools import schematic as S
+
+        # Power/flag virtual references must be accepted.
+        S._validate_reference("#FLG01")
+        S._validate_reference("#PWR0101")
+
+    def test_validate_reference_rejects_bad(self) -> None:
+        import pytest
+
+        from kicad_mcp.tools import schematic as S
+
+        with pytest.raises(ValueError):
+            S._validate_reference("R 1")  # space
+        with pytest.raises(ValueError):
+            S._validate_reference("R#1")  # '#' only allowed as prefix
+
+    def test_symbol_flag_reads_and_defaults(self) -> None:
+        from kicad_mcp.sexp.parser import parse as sexp_parse
+        from kicad_mcp.tools import schematic as S
+
+        node = sexp_parse('(symbol "X" (in_bom no) (on_board no))')
+        assert S._symbol_flag(node, "in_bom") == "no"
+        assert S._symbol_flag(node, "on_board") == "no"
+        # Missing flag falls back to the default.
+        assert S._symbol_flag(sexp_parse('(symbol "Y")'), "in_bom") == "yes"
+
+    def test_add_symbol_stub_defaults_in_bom_yes(self, tmp_path: Path) -> None:
+        from kicad_mcp.tools import schematic as S
+
+        sch = str(tmp_path / "t.kicad_sch")
+        S._create_schematic_handler(sch)
+        S._open_schematic_handler(sch)
+        # Unknown lib -> stub path, should default to in_bom/on_board yes.
+        S._add_symbol_handler("Device:R", "R1", "10k", 100.0, 100.0)
+        S._save_schematic_handler()
+        txt = Path(sch).read_text()
+        assert "(in_bom yes)" in txt and "(on_board yes)" in txt

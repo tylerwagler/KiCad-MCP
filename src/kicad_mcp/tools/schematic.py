@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import uuid as _uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -46,8 +47,10 @@ def _validate_reference(ref: str) -> None:
         raise ValueError("Reference cannot be empty")
     if len(ref) > 32:
         raise ValueError("Reference too long (max 32 chars)")
-    # KiCad references contain alphanumerics, _, -, .
-    if not re.match(r"^[a-zA-Z0-9_.\-]+$", ref):
+    # KiCad references contain alphanumerics, _, -, . — and a leading '#' for
+    # virtual/power references (e.g. #PWR01, #FLG01) that are excluded from
+    # annotation and the BOM.
+    if not re.match(r"^#?[a-zA-Z0-9_.\-]+$", ref):
         raise ValueError(f"Invalid reference: {ref!r}")
 
 
@@ -255,6 +258,19 @@ def _symbol_property_value(sym_node: SExp, name: str) -> str | None:
     return None
 
 
+def _symbol_flag(sym_node: SExp, name: str, default: str = "yes") -> str:
+    """Read a lib symbol's yes/no flag (e.g. ``(in_bom no)``), defaulting if absent.
+
+    Only the symbol's own direct flags are honored — not the units' — so power
+    symbols and other non-BOM parts (mounting holes, fiducials, logos) keep their
+    declared attributes instead of being forced into the BOM / onto the board.
+    """
+    for child in sym_node.children:
+        if child.name == name and child.first_value in ("yes", "no"):
+            return child.first_value
+    return default
+
+
 def _transform_pin(
     px: float, py: float, ox: float, oy: float, angle: float, mirror: str | None
 ) -> tuple[float, float]:
@@ -305,6 +321,8 @@ def _resolve_lib_symbol(doc: Document, lib_id: str) -> dict[str, Any] | None:
         "pins": _symbol_pin_numbers(sym_node),
         "geometry": _symbol_pin_geometry(sym_node),
         "footprint": _symbol_property_value(sym_node, "Footprint") or "",
+        "in_bom": _symbol_flag(sym_node, "in_bom"),
+        "on_board": _symbol_flag(sym_node, "on_board"),
     }
 
     lib_symbols = doc.root.find("lib_symbols")
@@ -498,11 +516,17 @@ def _add_symbol_handler(
         pin_numbers = resolved["pins"]
         footprint = resolved["footprint"]
         geometry = resolved["geometry"]
+        # Honor the symbol's own BOM/board attributes so power symbols, mounting
+        # holes, fiducials, etc. aren't force-added to the BOM / board.
+        in_bom = resolved["in_bom"]
+        on_board = resolved["on_board"]
     else:
         # Fallback for an unresolvable symbol: keep the legacy 2-pin stub.
         pin_numbers = ["1", "2"]
         footprint = ""
         geometry = {}
+        in_bom = "yes"
+        on_board = "yes"
 
     pins_text = " ".join(f'(pin "{n}" (uuid "{_uuid.uuid4()}"))' for n in pin_numbers)
 
@@ -514,7 +538,7 @@ def _add_symbol_handler(
 
     sym_text = (
         f"(symbol (lib_id {quoted_lib_id}) (at {x} {y} {angle}) (unit {unit})"
-        f" (in_bom yes) (on_board yes)"
+        f" (in_bom {in_bom}) (on_board {on_board})"
         f' (uuid "{sym_uuid}")'
         f' (property "Reference" {quoted_reference} (at {x} {y - 2.54} 0)'
         f" (effects (font (size 1.27 1.27))))"
@@ -1118,6 +1142,173 @@ def _insert_before_sheet_instances(doc: Document, node: SExp) -> None:
     doc.root.children.insert(insert_idx, node)
 
 
+# ── Delete handlers for non-symbol items ────────────────────────────
+#
+# add_label/add_wire/add_junction/add_no_connect previously had no remove
+# counterpart (only delete_symbol existed), so a mis-placed label or stray
+# no-connect could only be removed by hand-editing the file. These close that
+# gap. Coordinates are matched with a small tolerance because the schematic
+# stores them to ~4 decimal places.
+
+_COORD_TOL = 0.01  # mm
+
+
+def _coord_eq(a: float, b: float) -> bool:
+    """Compare two schematic coordinates within grid tolerance."""
+    return abs(a - b) <= _COORD_TOL
+
+
+def _at_xy(node: SExp) -> tuple[float, float] | None:
+    """Return (x, y) from a node's ``(at ...)``, or None if absent/invalid."""
+    at = node.get("at")
+    if at is None:
+        return None
+    av = at.atom_values
+    try:
+        return float(av[0]), float(av[1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _delete_root_matches(doc: Document, predicate: Callable[[SExp], bool]) -> int:
+    """Remove every top-level child for which ``predicate(child)`` is true.
+
+    Returns the number removed. Iterates a snapshot so removal is safe.
+    """
+    removed = 0
+    for child in list(doc.root.children):
+        if predicate(child):
+            doc.root.children.remove(child)
+            removed += 1
+    return removed
+
+
+def _delete_label_handler(name: str, x: float, y: float) -> dict[str, Any]:
+    """Delete a net label by name at a coordinate.
+
+    Args:
+        name: Label name (must match exactly, e.g. "VCC").
+        x: X position (mm).
+        y: Y position (mm).
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+
+    def _match(c: SExp) -> bool:
+        if c.name != "label" or c.first_value != name:
+            return False
+        xy = _at_xy(c)
+        return xy is not None and _coord_eq(xy[0], x) and _coord_eq(xy[1], y)
+
+    count = _delete_root_matches(doc, _match)
+    if count == 0:
+        return {"error": f"No label '{name}' at ({x}, {y})"}
+    schematic_state.refresh()
+    return {
+        "status": "deleted",
+        "type": "label",
+        "name": name,
+        "position": {"x": x, "y": y},
+        "count": count,
+    }
+
+
+def _delete_wire_handler(
+    start_x: float, start_y: float, end_x: float, end_y: float
+) -> dict[str, Any]:
+    """Delete a wire between two endpoints (matched in either direction).
+
+    Args:
+        start_x: Start X (mm).
+        start_y: Start Y (mm).
+        end_x: End X (mm).
+        end_y: End Y (mm).
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    s = (start_x, start_y)
+    e = (end_x, end_y)
+
+    def _endpoints(c: SExp) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        pts = c.get("pts")
+        if pts is None:
+            return None
+        xys = [g for g in pts.children if g.name == "xy"]
+        if len(xys) < 2:
+            return None
+        try:
+            a = (float(xys[0].atom_values[0]), float(xys[0].atom_values[1]))
+            b = (float(xys[1].atom_values[0]), float(xys[1].atom_values[1]))
+        except (ValueError, IndexError):
+            return None
+        return a, b
+
+    def _pt_eq(p: tuple[float, float], q: tuple[float, float]) -> bool:
+        return _coord_eq(p[0], q[0]) and _coord_eq(p[1], q[1])
+
+    def _match(c: SExp) -> bool:
+        if c.name != "wire":
+            return False
+        ends = _endpoints(c)
+        if ends is None:
+            return False
+        a, b = ends
+        return (_pt_eq(a, s) and _pt_eq(b, e)) or (_pt_eq(a, e) and _pt_eq(b, s))
+
+    count = _delete_root_matches(doc, _match)
+    if count == 0:
+        return {"error": f"No wire between ({start_x}, {start_y}) and ({end_x}, {end_y})"}
+    schematic_state.refresh()
+    return {
+        "status": "deleted",
+        "type": "wire",
+        "start": {"x": start_x, "y": start_y},
+        "end": {"x": end_x, "y": end_y},
+        "count": count,
+    }
+
+
+def _delete_at_point_handler(kind: str, x: float, y: float) -> dict[str, Any]:
+    """Delete a junction or no_connect at a coordinate (shared by both tools)."""
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+
+    def _match(c: SExp) -> bool:
+        if c.name != kind:
+            return False
+        xy = _at_xy(c)
+        return xy is not None and _coord_eq(xy[0], x) and _coord_eq(xy[1], y)
+
+    count = _delete_root_matches(doc, _match)
+    if count == 0:
+        return {"error": f"No {kind} at ({x}, {y})"}
+    schematic_state.refresh()
+    return {"status": "deleted", "type": kind, "position": {"x": x, "y": y}, "count": count}
+
+
+def _delete_junction_handler(x: float, y: float) -> dict[str, Any]:
+    """Delete a wire junction dot at a coordinate.
+
+    Args:
+        x: X position (mm).
+        y: Y position (mm).
+    """
+    return _delete_at_point_handler("junction", x, y)
+
+
+def _delete_no_connect_handler(x: float, y: float) -> dict[str, Any]:
+    """Delete a no-connect (X) flag at a coordinate.
+
+    Args:
+        x: X position (mm).
+        y: Y position (mm).
+    """
+    return _delete_at_point_handler("no_connect", x, y)
+
+
 def _run_erc_handler() -> dict[str, Any]:
     """Run the Electrical Rules Check (ERC) on the current schematic via kicad-cli.
 
@@ -1257,6 +1448,53 @@ register_tool(
         "y": {"type": "number", "description": "Pin Y position (mm)."},
     },
     handler=_add_no_connect_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="delete_label",
+    description="Delete a net label by name at a coordinate (mm).",
+    parameters={
+        "name": {"type": "string", "description": "Label name (e.g., 'VCC')."},
+        "x": {"type": "number", "description": "X position (mm)."},
+        "y": {"type": "number", "description": "Y position (mm)."},
+    },
+    handler=_delete_label_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="delete_wire",
+    description="Delete a wire between two endpoints (matched in either direction).",
+    parameters={
+        "start_x": {"type": "number", "description": "Start X (mm)."},
+        "start_y": {"type": "number", "description": "Start Y (mm)."},
+        "end_x": {"type": "number", "description": "End X (mm)."},
+        "end_y": {"type": "number", "description": "End Y (mm)."},
+    },
+    handler=_delete_wire_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="delete_junction",
+    description="Delete a wire junction dot at a coordinate (mm).",
+    parameters={
+        "x": {"type": "number", "description": "X position (mm)."},
+        "y": {"type": "number", "description": "Y position (mm)."},
+    },
+    handler=_delete_junction_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="delete_no_connect",
+    description="Delete a no-connect (X) flag at a coordinate (mm).",
+    parameters={
+        "x": {"type": "number", "description": "X position (mm)."},
+        "y": {"type": "number", "description": "Y position (mm)."},
+    },
+    handler=_delete_no_connect_handler,
     category="schematic",
 )
 
