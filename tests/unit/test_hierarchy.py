@@ -421,7 +421,7 @@ class TestAnnotation:
         child = tmp_path / "child.kicad_sch"
         power = (
             '\t(symbol (lib_id "power:GND") (at 20 20 0) (unit 1)'
-            ' (in_bom no) (on_board yes)'
+            " (in_bom no) (on_board yes)"
             ' (uuid "0a0a0a0a-0a0a-0a0a-0a0a-0a0a0a0a0a0a")\n'
             '\t\t(property "Reference" "#PWR01" (at 20 20 0)'
             " (effects (font (size 1.27 1.27))))\n"
