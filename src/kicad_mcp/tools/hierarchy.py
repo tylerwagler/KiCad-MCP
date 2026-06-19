@@ -17,11 +17,6 @@ from .registry import register_tool
 
 _VALID_SHAPES = frozenset({"input", "output", "bidirectional", "tri_state", "passive"})
 
-# Static KiCad 10 schematic stamps for newly created sub-sheet files. (The
-# dynamic kicad-cli detection lives on a separate branch; reconcile on merge.)
-_SCH_VERSION = "20260306"
-_GENERATOR_VERSION = "10.0"
-
 
 def _name_ok(name: str) -> bool:
     return bool(name) and len(name) <= 255 and "\n" not in name and '"' not in name
@@ -215,6 +210,7 @@ def _add_sheet_handler(
         pins: Optional list of {name, shape} for sheet pins / hierarchical labels.
     """
     from .. import schematic_state
+    from ..backends.format_version import detect_format_stamps
 
     if not _name_ok(name):
         return {"error": f"Invalid sheet name: {name!r}"}
@@ -257,11 +253,12 @@ def _add_sheet_handler(
         f' (uuid "{_uuid.uuid4()}"))'
         for i, p in enumerate(pins)
     )
+    stamps = detect_format_stamps()
     child_content = (
         f"(kicad_sch\n"
-        f"\t(version {_SCH_VERSION})\n"
+        f"\t(version {stamps.sch_version})\n"
         f'\t(generator "kicad_mcp")\n'
-        f'\t(generator_version "{_GENERATOR_VERSION}")\n'
+        f'\t(generator_version "{stamps.generator_version}")\n'
         f'\t(uuid "{child_uuid}")\n'
         f'\t(paper "A4")\n'
         f"\t(lib_symbols)\n"
