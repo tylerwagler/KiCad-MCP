@@ -196,15 +196,16 @@ class TestHierarchyReadTools:
 
 
 class TestHierarchyEditTools:
-    def test_add_symbol_to_reused_sheet_gets_all_paths(self, loaded):
+    def test_add_symbol_to_reused_sheet_distinct_refs(self, loaded):
         tree = H._get_sheet_hierarchy_handler()
         H._select_sheet_handler(tree["children"][0]["instance_path"])
         res = S._add_symbol_handler("Device:C", "C1", "100nF", 60, 40)
         assert res["status"] == "added"
-        # The added symbol must carry one instance path per placement (2).
+        # Each placement of the reused sheet gets its own reference (no dupes).
+        assert res["instance_references"] == ["C1", "C2"]
         comps = H._list_hierarchical_symbols_handler()["components"]
-        c1 = [c for c in comps if c["reference"] == "C1"]
-        assert len(c1) == 2  # appears in both reused placements
+        added = sorted(c["reference"] for c in comps if c["reference"] in ("C1", "C2"))
+        assert added == ["C1", "C2"]
 
     def test_add_hierarchical_label(self, loaded):
         tree = H._get_sheet_hierarchy_handler()
@@ -326,3 +327,88 @@ class TestHierarchicalNetlist:
         assert r["component_count"] >= 1
         assert r["net_count"] >= 1
         assert Path(out).exists()
+
+
+# ── Annotation (reused-sheet reference uniqueness) ───────────────────
+
+
+class TestReferenceHelpers:
+    def test_split_reference(self):
+        from kicad_mcp.schema.hierarchy import split_reference
+
+        assert split_reference("C12") == ("C", 12)
+        assert split_reference("RV201") == ("RV", 201)
+        assert split_reference("C") == ("C", None)
+        assert split_reference("C?") == ("C", None)
+
+    def test_next_free_reference(self):
+        from kicad_mcp.schema.hierarchy import next_free_reference
+
+        assert next_free_reference("C", set()) == "C1"
+        assert next_free_reference("C", {"C1", "C2"}) == "C3"
+        assert next_free_reference("C", {"C1", "C3"}) == "C2"
+
+
+class TestAnnotation:
+    def test_add_symbol_rejects_existing_reference(self, loaded):
+        # R1 already exists in the fixture (whole-hierarchy check).
+        res = S._add_symbol_handler("Device:C", "R1", "1u", 60, 40)
+        assert "error" in res
+
+    def test_add_multiple_symbols_no_collision(self, loaded):
+        tree = H._get_sheet_hierarchy_handler()
+        H._select_sheet_handler(tree["children"][0]["instance_path"])
+        S._add_symbol_handler("Device:C", "C1", "1u", 60, 40)
+        S._add_symbol_handler("Device:C", "C3", "2u", 70, 40)
+        refs = sorted(
+            c["reference"]
+            for c in H._list_hierarchical_symbols_handler()["components"]
+            if c["reference"].startswith("C")
+        )
+        assert refs == ["C1", "C2", "C3", "C4"]
+        assert len(set(refs)) == len(refs)  # all distinct
+
+    def _make_duplicate(self, tmp_path):
+        import shutil
+
+        for f in ("root.kicad_sch", "child.kicad_sch"):
+            shutil.copy(FIXTURES / f, tmp_path / f)
+        child = tmp_path / "child.kicad_sch"
+        child.write_text(child.read_text().replace('(reference "R2")', '(reference "R1")'))
+        return str(tmp_path / "root.kicad_sch")
+
+    def test_annotate_fixes_duplicates(self, tmp_path):
+        root = self._make_duplicate(tmp_path)
+        H._open_hierarchy_handler(root)
+        before = sorted(
+            c["reference"] for c in H._list_hierarchical_symbols_handler()["components"]
+        )
+        assert before == ["R1", "R1"]  # the bug
+        res = H._annotate_hierarchy_handler()
+        assert res["status"] == "annotated"
+        assert res["change_count"] == 1
+        after = sorted(c["reference"] for c in H._list_hierarchical_symbols_handler()["components"])
+        assert after == ["R1", "R2"]
+
+    def test_annotate_persists(self, tmp_path):
+        root = self._make_duplicate(tmp_path)
+        H._open_hierarchy_handler(root)
+        H._annotate_hierarchy_handler()
+        H._save_hierarchy_handler()
+        H._open_hierarchy_handler(root)
+        after = sorted(c["reference"] for c in H._list_hierarchical_symbols_handler()["components"])
+        assert after == ["R1", "R2"]
+
+    def test_annotate_dry_run_no_change(self, tmp_path):
+        root = self._make_duplicate(tmp_path)
+        H._open_hierarchy_handler(root)
+        res = H._annotate_hierarchy_handler(dry_run=True)
+        assert res["status"] == "preview"
+        assert res["change_count"] == 1
+        # Nothing applied.
+        after = sorted(c["reference"] for c in H._list_hierarchical_symbols_handler()["components"])
+        assert after == ["R1", "R1"]
+
+    def test_annotate_clean_is_noop(self, loaded):
+        res = H._annotate_hierarchy_handler()
+        assert res["change_count"] == 0

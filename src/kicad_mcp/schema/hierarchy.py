@@ -18,6 +18,7 @@ set of component instances with their correct per-path references.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,28 @@ from typing import Any
 
 from ..sexp import Document
 from .extract_schematic import extract_sheets, extract_symbols
+
+_REF_SPLIT = re.compile(r"^(.*?)(\d+)$")
+
+
+def split_reference(reference: str) -> tuple[str, int | None]:
+    """Split a reference into (prefix, number).
+
+    ``"C12"`` → ``("C", 12)``; ``"RV201"`` → ``("RV", 201)``;
+    ``"C"`` / ``"C?"`` → ``("C", None)`` (unannotated).
+    """
+    m = _REF_SPLIT.match(reference)
+    if m:
+        return m.group(1), int(m.group(2))
+    return reference.rstrip("?"), None
+
+
+def next_free_reference(prefix: str, used: set[str]) -> str:
+    """Lowest ``<prefix><n>`` (n ≥ 1) not already in ``used``."""
+    n = 1
+    while f"{prefix}{n}" in used:
+        n += 1
+    return f"{prefix}{n}"
 
 
 @dataclass

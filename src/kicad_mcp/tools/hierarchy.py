@@ -32,6 +32,67 @@ def _insert_before_sheet_instances(root: Any, node: Any) -> None:
     root.children.insert(idx, node)
 
 
+def _find_symbol_by_uuid(doc: Any, uuid: str) -> Any:
+    """Find a placed (symbol) node by its uuid (skips lib_symbols defs)."""
+    for sym in doc.root.find_all("symbol"):
+        if sym.get("lib_id") is None:
+            continue
+        un = sym.get("uuid")
+        if un is not None and un.first_value == uuid:
+            return sym
+    return None
+
+
+def _set_atom_value(node: Any, value: str) -> bool:
+    """Set the first atom child's value of a ``(key value)`` node, in place."""
+    quoted = _quote_if_needed(value)
+    for child in node.children:
+        if child.is_atom:
+            child.value = value
+            child._original_str = quoted
+            return True
+    return False
+
+
+def _set_instance_reference(sym: Any, path: str, new_ref: str) -> bool:
+    """Update the reference of the symbol's instance entry for ``path``."""
+    inst = sym.get("instances")
+    if inst is None:
+        return False
+    for proj in inst.find_all("project"):
+        for path_node in proj.find_all("path"):
+            if path_node.first_value == path:
+                ref_node = path_node.get("reference")
+                if ref_node is not None:
+                    return _set_atom_value(ref_node, new_ref)
+    return False
+
+
+def _first_instance_reference(sym: Any) -> str | None:
+    inst = sym.get("instances")
+    if inst is None:
+        return None
+    for proj in inst.find_all("project"):
+        for path_node in proj.find_all("path"):
+            ref_node = path_node.get("reference")
+            val = ref_node.first_value if ref_node is not None else None
+            if isinstance(val, str) and val:
+                return val
+    return None
+
+
+def _set_property_value(sym: Any, prop_name: str, value: str) -> bool:
+    """Set ``(property "<prop_name>" <value> ...)`` — value is the second atom."""
+    for prop in sym.find_all("property"):
+        if prop.first_value == prop_name:
+            atoms = [c for c in prop.children if c.is_atom]
+            if len(atoms) >= 2:
+                atoms[1].value = value
+                atoms[1]._original_str = _quote_if_needed(value)
+                return True
+    return False
+
+
 # ── Read tools ───────────────────────────────────────────────────────
 
 
@@ -359,6 +420,66 @@ def _save_hierarchy_handler() -> dict[str, Any]:
     return {"status": "saved", "count": len(saved), "files": saved}
 
 
+def _annotate_hierarchy_handler(dry_run: bool = False) -> dict[str, Any]:
+    """Assign unique reference designators across the whole hierarchy.
+
+    Every component instance (one per sheet placement) must have a reference
+    that is unique in the flattened design. This finds duplicates and
+    unannotated symbols and reassigns them to the next free number for their
+    prefix — the fix for reused sheets whose copies share a reference. Edits the
+    in-memory documents; call save_hierarchy to persist.
+
+    Args:
+        dry_run: If true, only report the changes without applying them.
+    """
+    from .. import schematic_state
+    from ..schema.hierarchy import next_free_reference, split_reference
+
+    h = schematic_state.get_hierarchy()
+    used: set[str] = set()
+    changes: list[dict[str, Any]] = []
+    for comp in h.enumerate_components():
+        ref = comp.reference
+        prefix, number = split_reference(ref)
+        new_ref = next_free_reference(prefix, used) if number is None or ref in used else ref
+        used.add(new_ref)
+        if new_ref != ref:
+            changes.append(
+                {
+                    "file": comp.file,
+                    "symbol_uuid": comp.symbol_uuid,
+                    "path": comp.sheet_path,
+                    "sheet": comp.sheet_name,
+                    "old": ref,
+                    "new": new_ref,
+                }
+            )
+
+    if not dry_run and changes:
+        touched = []
+        for ch in changes:
+            doc = h.docs.get(ch["file"])
+            if doc is None:
+                continue
+            sym = _find_symbol_by_uuid(doc, ch["symbol_uuid"])
+            if sym is None:
+                continue
+            _set_instance_reference(sym, ch["path"], ch["new"])
+            touched.append(sym)
+        # Keep each symbol's displayed Reference in sync with its first instance.
+        for sym in touched:
+            first = _first_instance_reference(sym)
+            if first:
+                _set_property_value(sym, "Reference", first)
+        schematic_state.refresh()
+
+    return {
+        "status": "preview" if dry_run else "annotated",
+        "change_count": len(changes),
+        "changes": changes,
+    }
+
+
 # ── Phase 4: cross-sheet connectivity + netlist ──────────────────────
 
 
@@ -560,6 +681,23 @@ register_tool(
     description="Save every loaded sheet document in the hierarchy to disk.",
     parameters={},
     handler=_save_hierarchy_handler,
+    category="hierarchy",
+)
+
+register_tool(
+    name="annotate_hierarchy",
+    description=(
+        "Assign unique reference designators across the whole hierarchy, fixing "
+        "duplicates (e.g. reused-sheet copies sharing a reference) and unannotated "
+        "symbols. Use dry_run to preview."
+    ),
+    parameters={
+        "dry_run": {
+            "type": "boolean",
+            "description": "Preview changes without applying. Default false.",
+        },
+    },
+    handler=_annotate_hierarchy_handler,
     category="hierarchy",
 )
 

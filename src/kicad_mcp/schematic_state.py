@@ -17,8 +17,15 @@ _current_sheet_path: str | None = None  # instance path of the active sheet
 
 
 def load_schematic(path: str) -> SchematicSummary:
-    """Load a schematic file and extract its summary."""
+    """Load a single schematic file and extract its summary.
+
+    Clears any previously loaded hierarchy so single-file edits don't pick up a
+    stale multi-sheet context.
+    """
     global _current_doc, _current_summary, _current_symbols
+    global _hierarchy, _current_sheet_path
+    _hierarchy = None
+    _current_sheet_path = None
     _current_doc = Document.load(path)
     _current_summary = extract_schematic_summary(_current_doc)
     _current_symbols = extract_symbols(_current_doc)
