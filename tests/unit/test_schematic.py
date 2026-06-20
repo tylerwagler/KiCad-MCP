@@ -416,3 +416,60 @@ class TestReferenceAndBomAttributes:
         S._save_schematic_handler()
         txt = Path(sch).read_text()
         assert "(in_bom yes)" in txt and "(on_board yes)" in txt
+
+
+class TestSymbolDNP:
+    """Do Not Populate (DNP) — add as DNP, read back, toggle on existing."""
+
+    def _new_sch(self, tmp_path: Path):
+        from kicad_mcp.tools import schematic as S
+
+        sch = str(tmp_path / "t.kicad_sch")
+        S._create_schematic_handler(sch)
+        S._open_schematic_handler(sch)
+        return S, sch
+
+    def test_add_symbol_dnp(self, tmp_path: Path) -> None:
+        from kicad_mcp.schema.extract_schematic import extract_symbols
+        from kicad_mcp.sexp import Document
+
+        S, sch = self._new_sch(tmp_path)
+        res = S._add_symbol_handler("Device:R", "R1", "10k", 100.0, 100.0, dnp=True)
+        assert res["dnp"] is True
+        S._save_schematic_handler()
+        txt = Path(sch).read_text()
+        assert "(dnp yes)" in txt
+        # KiCad default: DNP parts stay in the BOM.
+        r1 = next(s for s in extract_symbols(Document.load(sch)) if s.reference == "R1")
+        assert r1.dnp is True
+        assert r1.in_bom is True
+
+    def test_add_symbol_default_not_dnp(self, tmp_path: Path) -> None:
+        from kicad_mcp.schema.extract_schematic import extract_symbols
+        from kicad_mcp.sexp import Document
+
+        S, sch = self._new_sch(tmp_path)
+        S._add_symbol_handler("Device:R", "R1", "10k", 100.0, 100.0)
+        S._save_schematic_handler()
+        r1 = next(s for s in extract_symbols(Document.load(sch)) if s.reference == "R1")
+        assert r1.dnp is False
+
+    def test_set_symbol_dnp_toggle(self, tmp_path: Path) -> None:
+        from kicad_mcp.schema.extract_schematic import extract_symbols
+        from kicad_mcp.sexp import Document
+
+        S, sch = self._new_sch(tmp_path)
+        S._add_symbol_handler("Device:R", "R1", "10k", 100.0, 100.0)  # not DNP
+        assert S._set_symbol_dnp_handler("R1", True)["dnp"] is True
+        S._save_schematic_handler()
+        r1 = next(s for s in extract_symbols(Document.load(sch)) if s.reference == "R1")
+        assert r1.dnp is True
+        # Clear it again.
+        S._set_symbol_dnp_handler("R1", False)
+        S._save_schematic_handler()
+        r1 = next(s for s in extract_symbols(Document.load(sch)) if s.reference == "R1")
+        assert r1.dnp is False
+
+    def test_set_symbol_dnp_missing(self, tmp_path: Path) -> None:
+        S, _ = self._new_sch(tmp_path)
+        assert "error" in S._set_symbol_dnp_handler("R9", True)

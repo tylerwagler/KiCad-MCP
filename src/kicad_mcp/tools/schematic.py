@@ -478,6 +478,7 @@ def _add_symbol_handler(
     y: float,
     angle: float = 0,
     unit: int = 1,
+    dnp: bool = False,
 ) -> dict[str, Any]:
     """Add a new symbol instance to the schematic.
 
@@ -489,6 +490,7 @@ def _add_symbol_handler(
         y: Y position.
         angle: Rotation angle in degrees. Default: 0.
         unit: Symbol unit number. Default: 1.
+        dnp: Mark "Do Not Populate" (kept in BOM but flagged). Default: False.
     """
     from .. import schematic_state
 
@@ -538,7 +540,7 @@ def _add_symbol_handler(
 
     sym_text = (
         f"(symbol (lib_id {quoted_lib_id}) (at {x} {y} {angle}) (unit {unit})"
-        f" (in_bom {in_bom}) (on_board {on_board})"
+        f" (in_bom {in_bom}) (on_board {on_board}) (dnp {'yes' if dnp else 'no'})"
         f' (uuid "{sym_uuid}")'
         f' (property "Reference" {quoted_reference} (at {x} {y - 2.54} 0)'
         f" (effects (font (size 1.27 1.27))))"
@@ -574,6 +576,7 @@ def _add_symbol_handler(
         "pin_count": len(pin_numbers),
         "resolved": bool(resolved and resolved["pins"]),
         "footprint": footprint,
+        "dnp": dnp,
         "pins": pin_positions,
     }
     # On a reused sheet the symbol exists once per placement, each with its own
@@ -789,6 +792,10 @@ register_tool(
         "y": {"type": "number", "description": "Y position."},
         "angle": {"type": "number", "description": "Rotation degrees. Default: 0."},
         "unit": {"type": "integer", "description": "Symbol unit. Default: 1."},
+        "dnp": {
+            "type": "boolean",
+            "description": "Mark Do Not Populate (kept in BOM, flagged). Default: false.",
+        },
     },
     handler=_add_symbol_handler,
     category="schematic",
@@ -1096,6 +1103,46 @@ def _edit_sch_symbol_handler(reference: str, properties: dict[str, str]) -> dict
         return {"error": f"No matching properties on {reference}: {sorted(properties)}"}
     schematic_state.refresh()
     return {"status": "edited", "reference": reference, "updated": updated}
+
+
+def _set_symbol_dnp_handler(reference: str, dnp: bool = True) -> dict[str, Any]:
+    """Set or clear the "Do Not Populate" flag on a placed symbol.
+
+    DNP keeps the part in the BOM (flagged) but marks it not to be populated —
+    matching KiCad's default DNP behaviour.
+
+    Args:
+        reference: Reference designator (e.g., "R1").
+        dnp: True to mark DNP, False to clear it. Default: True.
+    """
+    from .. import schematic_state
+
+    doc = schematic_state.get_document()
+    node = _find_instance_node(doc, reference)
+    if node is None:
+        return {"error": f"Symbol '{reference}' not found"}
+
+    val = "yes" if dnp else "no"
+    dnp_node = node.get("dnp")
+    if dnp_node is not None:
+        for child in dnp_node.children:
+            if child.is_atom:
+                child.value = val
+                child._original_str = val
+                break
+    else:
+        # KiCad orders dnp after on_board/in_bom and before uuid.
+        new_node = sexp_parse(f"(dnp {val})")
+        idx = len(node.children)
+        for i, child in enumerate(node.children):
+            if child.name in ("on_board", "in_bom"):
+                idx = i + 1
+            elif child.name == "uuid":
+                idx = min(idx, i)
+        node.children.insert(idx, new_node)
+
+    schematic_state.refresh()
+    return {"status": "updated", "reference": reference, "dnp": dnp}
 
 
 def _add_junction_handler(x: float, y: float) -> dict[str, Any]:
@@ -1426,6 +1473,23 @@ register_tool(
         },
     },
     handler=_edit_sch_symbol_handler,
+    category="schematic",
+)
+
+register_tool(
+    name="set_symbol_dnp",
+    description=(
+        "Set or clear a placed symbol's Do Not Populate (DNP) flag — kept in BOM "
+        "but flagged (KiCad default)."
+    ),
+    parameters={
+        "reference": {"type": "string", "description": "Reference designator (e.g., 'R1')."},
+        "dnp": {
+            "type": "boolean",
+            "description": "True to mark DNP, False to clear. Default true.",
+        },
+    },
+    handler=_set_symbol_dnp_handler,
     category="schematic",
 )
 
