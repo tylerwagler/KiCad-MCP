@@ -13,8 +13,8 @@ _Last updated: 2026-06-17_
 | Stack | Pure Python (FastMCP) | Python + TypeScript (two-process) |
 | KiCad communication | 3 backends with fallback: **S-expr parser**, kicad-cli, IPC (kipy) | `pcbnew` SWIG + IPC (kipy) |
 | Reads without KiCad installed | ✅ Yes (pure-Python parser) | ❌ No — requires `pcbnew` |
-| Total tools | 146 | 122 |
-| Tool router | ✅ 9 direct + 137 routed + 4 meta | ✅ 18 direct + 65 routed + 35 always-on + 4 meta |
+| Total tools | 151 | 122 |
+| Tool router | ✅ 9 direct + 142 routed + 4 meta | ✅ 18 direct + 65 routed + 35 always-on + 4 meta |
 | Undo / safety model | ✅ Query-before-commit transactions, undo stack, rollback | ❌ Snapshots only ("operations are permanent unless reverted") |
 | Dependencies | 2 core (FastMCP, httpx) + 1 optional (kipy) | KiCad 9, Node 18+, Python 3.11+, Java/Docker |
 
@@ -61,7 +61,7 @@ Most of these are tractable for them because `pcbnew` makes them cheap:
 - **Transaction / undo model** (their biggest gap).
 - **Install-free reads** + zero-dependency parser (2 core deps vs. KiCad+Node+Python+Java/Docker).
 - **Round-trip fidelity** preserving formatting/comments — important for version-controlled files.
-- **Test rigor** — 891 tests (657 pass, 234 env-gated skips), strict mypy, ruff.
+- **Test rigor** — 910 tests (676 pass, 234 env-gated skips), strict mypy, ruff.
 - **MCP three-pillar completeness** — 5 Resources + 3 Prompts (they have 8 resources, no prompts).
 - **Manufacturer DRC presets with `check_violations()`** (JLCPCB/OSHPark/PCBWay, tiered) —
   they have `set_design_rules` but no preset library.
