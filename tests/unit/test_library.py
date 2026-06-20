@@ -215,7 +215,7 @@ class TestKiCad10LibTables:
         top = tmp_path / "sym-lib-table"
         top.write_text(
             "(sym_lib_table\n"
-            f'  (lib (name "KiCad") (type "Table") (uri "{leaf}") (descr "nested"))\n'
+            f'  (lib (name "KiCad") (type "Table") (uri "{leaf.as_posix()}") (descr "nested"))\n'
             ")",
             encoding="utf-8",
         )
@@ -228,13 +228,13 @@ class TestKiCad10LibTables:
 
     def test_parse_guards_against_table_cycle(self, tmp_path: Path) -> None:
         a = tmp_path / "sym-lib-table"
+        b = tmp_path / "b"
         a.write_text(
-            f'(sym_lib_table (lib (name "B") (type "Table") (uri "{tmp_path / "b"}")))',
+            f'(sym_lib_table (lib (name "B") (type "Table") (uri "{b.as_posix()}")))',
             encoding="utf-8",
         )
-        b = tmp_path / "b"
         b.write_text(
-            f'(sym_lib_table (lib (name "A") (type "Table") (uri "{a}")))',
+            f'(sym_lib_table (lib (name "A") (type "Table") (uri "{a.as_posix()}")))',
             encoding="utf-8",
         )
         # Must terminate rather than recurse forever.
