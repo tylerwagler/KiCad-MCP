@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any
 
 from ..exceptions import ResourceNotFoundError
@@ -215,7 +216,8 @@ def apply_place(
     if existing is not None:
         raise ValueError(f"Component {reference!r} already exists on the board")
 
-    mod_path = _resolve_kicad_mod_path(footprint_library)
+    project_dir = Path(session.board_path).parent if session.board_path else None
+    mod_path = _resolve_kicad_mod_path(footprint_library, project_dir)
     if mod_path is not None:
         return place_from_kicad_mod(session, mod_path, reference, value, x, y, layer)
 
@@ -407,31 +409,51 @@ def apply_duplicate(
     return record
 
 
-def _resolve_kicad_mod_path(footprint_library: str) -> str | None:
-    """Try to resolve a library:footprint identifier to a .kicad_mod path."""
+def _resolve_kicad_mod_path(footprint_library: str, project_dir: Path | None = None) -> str | None:
+    """Resolve a ``library:footprint`` id to a .kicad_mod path.
+
+    Checks the project fp-lib-table first (so ``${KIPRJMOD}`` libraries — the
+    project's own footprints — resolve against ``project_dir``), then the
+    global/user fp-lib-table. Mirrors the schematic-side symbol resolution.
+    """
     if ":" not in footprint_library:
         return None
 
     lib_name, fp_name = footprint_library.split(":", 1)
 
     try:
-        from ..library import discover_lib_tables
+        from ..library import _kicad_env_paths, _parse_lib_table, discover_lib_tables
     except Exception:
         return None
 
+    def _mod_in(entry_uri: str) -> str | None:
+        mod_path = Path(entry_uri) / f"{fp_name}.kicad_mod"
+        return str(mod_path) if mod_path.exists() else None
+
+    # 1. Project fp-lib-table — expands ${KIPRJMOD} (the project's own libs).
+    if project_dir is not None:
+        proj_table = project_dir / "fp-lib-table"
+        if proj_table.exists():
+            try:
+                env = _kicad_env_paths()
+                env["KIPRJMOD"] = project_dir
+                for entry in _parse_lib_table(proj_table, env):
+                    if entry.name == lib_name:
+                        hit = _mod_in(entry.uri)
+                        if hit:
+                            return hit
+            except Exception:
+                pass
+
+    # 2. Global / user fp-lib-table.
     try:
-        tables = discover_lib_tables()
+        for entry in discover_lib_tables().get("footprint_libraries", []):
+            if entry.name == lib_name:
+                hit = _mod_in(entry.uri)
+                if hit:
+                    return hit
     except Exception:
         return None
-
-    from pathlib import Path
-
-    for entry in tables.get("footprint_libraries", []):
-        if entry.name == lib_name:
-            lib_dir = Path(entry.uri)
-            mod_path = lib_dir / f"{fp_name}.kicad_mod"
-            if mod_path.exists():
-                return str(mod_path)
     return None
 
 

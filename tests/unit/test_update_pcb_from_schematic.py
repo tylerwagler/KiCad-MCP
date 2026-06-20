@@ -65,7 +65,7 @@ class TestApplyUpdate:
         mod.write_text(_MOD)
         from kicad_mcp.session import placement_ops
 
-        def fake(fp_lib: str):
+        def fake(fp_lib: str, project_dir=None):
             return str(mod) if fp_lib == "Lib:R_test" else None
 
         monkeypatch.setattr(placement_ops, "_resolve_kicad_mod_path", fake)
@@ -140,3 +140,47 @@ class TestEndToEnd:
         assert out["nets_created"] > 0
         assert out["pads_assigned"] > 0
         assert out["unresolved"] == []
+
+
+class TestKiprjmodFootprintResolution:
+    """Project-local footprints (${KIPRJMOD}) must resolve on the PCB side."""
+
+    def test_resolves_project_footprint(self, tmp_path):
+        from kicad_mcp.session.placement_ops import _resolve_kicad_mod_path
+
+        # A project library registered with ${KIPRJMOD}, KiCad's convention.
+        pretty = tmp_path / "myproj.pretty"
+        pretty.mkdir()
+        (pretty / "MyFP.kicad_mod").write_text(_MOD)
+        (tmp_path / "fp-lib-table").write_text(
+            "(fp_lib_table\n"
+            '  (lib (name "myproj") (type "KiCad")'
+            ' (uri "${KIPRJMOD}/myproj.pretty") (descr "project"))\n'
+            ")",
+            encoding="utf-8",
+        )
+
+        # Without project_dir it can't resolve the ${KIPRJMOD} lib...
+        assert _resolve_kicad_mod_path("myproj:MyFP") is None
+        # ...with it, the project table is read and ${KIPRJMOD} expands.
+        hit = _resolve_kicad_mod_path("myproj:MyFP", tmp_path)
+        assert hit is not None
+        assert hit == str(pretty / "MyFP.kicad_mod")
+
+    def test_update_places_project_footprint(self, tmp_path):
+        # End-to-end through the session: a board in the project dir + a netlist
+        # referencing the project lib → the footprint is instantiated.
+        pretty = tmp_path / "myproj.pretty"
+        pretty.mkdir()
+        (pretty / "MyFP.kicad_mod").write_text(_MOD)
+        (tmp_path / "fp-lib-table").write_text(
+            '(fp_lib_table (lib (name "myproj") (type "KiCad") (uri "${KIPRJMOD}/myproj.pretty")))',
+            encoding="utf-8",
+        )
+        mgr, session, _ = _board_session(tmp_path)
+        comps = [{"ref": "U1", "value": "X", "footprint": "myproj:MyFP"}]
+        nets = [{"name": "N1", "nodes": [("U1", "1")]}]
+        out = mgr.apply_update_from_schematic(session, comps, nets)
+        assert out["added"] == ["U1"]
+        assert out["unresolved"] == []
+        assert out["pads_assigned"] == 1

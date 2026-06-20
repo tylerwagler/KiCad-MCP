@@ -174,12 +174,14 @@ def apply_update_from_schematic(
     the session's working document, recorded as ordinary undoable changes.
     """
     import math
+    from pathlib import Path
 
     from . import board_setup_ops, placement_ops
 
     require_active(session)
     assert session._working_doc is not None
     doc = session._working_doc
+    project_dir = Path(session.board_path).parent if session.board_path else None
 
     existing = _board_footprints(doc)
     existing_refs = set(existing)
@@ -201,7 +203,7 @@ def apply_update_from_schematic(
     if place_new and to_place:
         cols = max(1, math.ceil(math.sqrt(len(to_place))))
         for i, comp in enumerate(to_place):
-            mod = placement_ops._resolve_kicad_mod_path(comp["footprint"])
+            mod = placement_ops._resolve_kicad_mod_path(comp["footprint"], project_dir)
             if mod is None:
                 summary["unresolved"].append({"ref": comp["ref"], "footprint": comp["footprint"]})
                 continue
