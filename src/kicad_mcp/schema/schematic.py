@@ -20,6 +20,7 @@ class SchSymbol:
     uuid: str
     in_bom: bool = True
     on_board: bool = True
+    dnp: bool = False  # "Do Not Populate" — kept in BOM but flagged (KiCad default)
     pins: list[SchPin] = field(default_factory=list)
     properties: dict[str, str] = field(default_factory=dict)
     instances: list[SymbolInstance] = field(default_factory=list)
@@ -34,6 +35,7 @@ class SchSymbol:
             "uuid": self.uuid,
             "in_bom": self.in_bom,
             "on_board": self.on_board,
+            "dnp": self.dnp,
             "pin_count": len(self.pins),
             "properties": self.properties,
             "instances": [i.to_dict() for i in self.instances],

@@ -89,6 +89,7 @@ def extract_symbols(doc: Document) -> list[SchSymbol]:
 
         in_bom = _bool_val(sym_node.get("in_bom"))
         on_board = _bool_val(sym_node.get("on_board"))
+        dnp = _bool_val(sym_node.get("dnp"), default=False)
 
         # Extract properties
         reference = ""
@@ -123,6 +124,7 @@ def extract_symbols(doc: Document) -> list[SchSymbol]:
                 uuid=sym_uuid or "",
                 in_bom=in_bom,
                 on_board=on_board,
+                dnp=dnp,
                 pins=pins,
                 properties=properties,
                 instances=_extract_symbol_instances(sym_node),
