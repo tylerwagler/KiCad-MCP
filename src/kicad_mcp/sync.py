@@ -19,6 +19,45 @@ def _make_quoted(val: str) -> SExp:
     return SExp(value=val, _original_str=f'"{val}"')
 
 
+def parse_netlist_doc(doc: Document) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """Parse a kicadsexpr netlist (from ``kicad-cli sch export netlist``).
+
+    Returns ``(components, nets)`` where each component is
+    ``{"ref", "value", "footprint"}`` and each net is
+    ``{"name": str, "nodes": [(ref, pin), ...]}``.
+    """
+    components: list[dict[str, str]] = []
+    comps_node = doc.root.find("components")
+    if comps_node is not None:
+        for comp in comps_node.find_all("comp"):
+            ref = comp.get("ref")
+            val = comp.get("value")
+            fp = comp.get("footprint")
+            components.append(
+                {
+                    "ref": (ref.first_value if ref else "") or "",
+                    "value": (val.first_value if val else "") or "",
+                    "footprint": (fp.first_value if fp else "") or "",
+                }
+            )
+
+    nets: list[dict[str, Any]] = []
+    nets_node = doc.root.find("nets")
+    if nets_node is not None:
+        for net in nets_node.find_all("net"):
+            name_node = net.get("name")
+            name = (name_node.first_value if name_node else "") or ""
+            nodes: list[tuple[str, str]] = []
+            for node in net.find_all("node"):
+                r = node.get("ref")
+                p = node.get("pin")
+                if r is not None and p is not None and r.first_value and p.first_value:
+                    nodes.append((r.first_value, p.first_value))
+            nets.append({"name": name, "nodes": nodes})
+
+    return components, nets
+
+
 def _update_property(node: SExp, prop_name: str, new_value: str) -> bool:
     """Update a property value in an S-expr node.
 

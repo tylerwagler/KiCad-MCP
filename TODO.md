@@ -1,7 +1,7 @@
 # KiCad MCP — TODO
 
 ## Current State
-- 151 tools (9 direct + 142 routed + 4 meta), 910 tests (676 pass, 234 env-gated skips), 21 categories
+- 152 tools (9 direct + 143 routed + 4 meta), 916 tests (682 pass, 234 env-gated skips), 21 categories
 - Full featureparity with old Node.js server (which had 78% pass rate)
 - Best-in-class among 6 competing KiCad MCP repos
 - CI pipeline (GitHub Actions), integration tests, performance benchmarks

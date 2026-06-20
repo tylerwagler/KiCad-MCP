@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from typing import Any
 
 from ..sexp.parser import parse as sexp_parse
 from .helpers import find_footprint
@@ -137,6 +138,130 @@ def apply_assign_net(
     )
     session.changes.append(record)
     return record
+
+
+def _board_footprints(doc: Any) -> dict[str, str | None]:
+    """Map reference -> current Value for every footprint on the board."""
+    out: dict[str, str | None] = {}
+    for fp in doc.root.find_all("footprint"):
+        ref = None
+        val = None
+        for prop in fp.find_all("property"):
+            pv = prop.atom_values
+            if prop.first_value == "Reference" and len(pv) > 1:
+                ref = pv[1]
+            elif prop.first_value == "Value" and len(pv) > 1:
+                val = pv[1]
+        if ref:
+            out[ref] = val
+    return out
+
+
+def apply_update_from_schematic(
+    session: Session,
+    components: list[dict[str, str]],
+    nets: list[dict[str, Any]],
+    *,
+    place_new: bool = True,
+    remove_extra: bool = False,
+    spacing: float = 12.0,
+    origin: tuple[float, float] = (25.0, 25.0),
+) -> dict[str, Any]:
+    """Reconcile a board against a schematic netlist (the "Update PCB" flow).
+
+    Instantiates missing footprints from their libraries, updates values on
+    existing ones, creates net declarations, and assigns nets to pads — all on
+    the session's working document, recorded as ordinary undoable changes.
+    """
+    import math
+
+    from . import board_setup_ops, placement_ops
+
+    require_active(session)
+    assert session._working_doc is not None
+    doc = session._working_doc
+
+    existing = _board_footprints(doc)
+    existing_refs = set(existing)
+    summary: dict[str, Any] = {
+        "added": [],
+        "updated": [],
+        "unresolved": [],
+        "nets_created": 0,
+        "pads_assigned": 0,
+        "skipped": [],
+        "removed": [],
+    }
+
+    # 1. Place missing footprints from their libraries (real geometry only —
+    #    a footprint that can't be resolved to a .kicad_mod is reported, not
+    #    placed as a padless stub).
+    placed: set[str] = set()
+    to_place = [c for c in components if c["ref"] and c["ref"] not in existing_refs]
+    if place_new and to_place:
+        cols = max(1, math.ceil(math.sqrt(len(to_place))))
+        for i, comp in enumerate(to_place):
+            mod = placement_ops._resolve_kicad_mod_path(comp["footprint"])
+            if mod is None:
+                summary["unresolved"].append({"ref": comp["ref"], "footprint": comp["footprint"]})
+                continue
+            x = origin[0] + (i % cols) * spacing
+            y = origin[1] + (i // cols) * spacing
+            placement_ops.place_from_kicad_mod(session, mod, comp["ref"], comp["value"], x, y)
+            summary["added"].append(comp["ref"])
+            placed.add(comp["ref"])
+    on_board = existing_refs | placed
+
+    # 2. Reconcile values on footprints that were already on the board.
+    value_by_ref = {c["ref"]: c["value"] for c in components}
+    for ref in sorted(existing_refs):
+        new_val = value_by_ref.get(ref)
+        if new_val and existing.get(ref) != new_val:
+            try:
+                board_setup_ops.apply_edit_component(session, ref, {"Value": new_val})
+                summary["updated"].append(ref)
+            except (ValueError, KeyError):
+                pass
+
+    # 3. Create any net declarations the board is missing.
+    board_nets = set()
+    for nn in doc.root.find_all("net"):
+        v = nn.atom_values
+        if len(v) >= 2:
+            board_nets.add(v[1])
+    for net in nets:
+        name = net["name"]
+        if name and name not in board_nets:
+            apply_create_net(session, name)
+            board_nets.add(name)
+            summary["nets_created"] += 1
+
+    # 4. Assign nets to pads from the netlist.
+    for net in nets:
+        name = net["name"]
+        if not name:
+            continue
+        for ref, pin in net["nodes"]:
+            if ref not in on_board:
+                continue
+            try:
+                apply_assign_net(session, ref, pin, name)
+                summary["pads_assigned"] += 1
+            except ValueError:
+                summary["skipped"].append({"ref": ref, "pin": pin, "net": name})
+
+    # 5. Optionally remove footprints that are no longer in the schematic.
+    if remove_extra:
+        netlist_refs = {c["ref"] for c in components}
+        for ref in sorted(existing_refs):
+            if ref not in netlist_refs:
+                try:
+                    placement_ops.apply_delete(session, ref)
+                    summary["removed"].append(ref)
+                except ValueError:
+                    pass
+
+    return summary
 
 
 def apply_create_zone(
