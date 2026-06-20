@@ -153,6 +153,25 @@ class SessionManager:
     ) -> ChangeRecord:
         return net_zone_ops.apply_assign_net(session, reference, pad_number, net_name)
 
+    def apply_update_from_schematic(
+        self,
+        session: Session,
+        components: list[dict[str, str]],
+        nets: list[dict[str, Any]],
+        *,
+        place_new: bool = True,
+        remove_extra: bool = False,
+        spacing: float = 12.0,
+    ) -> dict[str, Any]:
+        return net_zone_ops.apply_update_from_schematic(
+            session,
+            components,
+            nets,
+            place_new=place_new,
+            remove_extra=remove_extra,
+            spacing=spacing,
+        )
+
     def apply_create_zone(
         self,
         session: Session,
