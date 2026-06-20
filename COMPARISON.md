@@ -61,7 +61,7 @@ Most of these are tractable for them because `pcbnew` makes them cheap:
 - **Transaction / undo model** (their biggest gap).
 - **Install-free reads** + zero-dependency parser (2 core deps vs. KiCad+Node+Python+Java/Docker).
 - **Round-trip fidelity** preserving formatting/comments — important for version-controlled files.
-- **Test rigor** — 916 tests (682 pass, 234 env-gated skips), strict mypy, ruff.
+- **Test rigor** — 918 tests (684 pass, 234 env-gated skips), strict mypy, ruff.
 - **MCP three-pillar completeness** — 5 Resources + 3 Prompts (they have 8 resources, no prompts).
 - **Manufacturer DRC presets with `check_violations()`** (JLCPCB/OSHPark/PCBWay, tiered) —
   they have `set_design_rules` but no preset library.
