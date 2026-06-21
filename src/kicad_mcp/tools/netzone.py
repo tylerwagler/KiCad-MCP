@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from ..session import SessionManager
@@ -276,6 +277,44 @@ def _set_layer_constraints_handler(
         return {"error": str(exc)}
 
 
+def _fill_zones_handler(session_id: str | None = None) -> dict[str, Any]:
+    """Fill all copper zones (compute filled_polygon) via pcbnew.
+
+    create_zone/add_copper_pour write only the zone outline; a zone is
+    electrically empty until filled, which throws off DRC, render, and routing.
+    kicad-cli has no fill command, so this uses pcbnew's ZONE_FILLER on the board
+    file. Commit the session first — fill operates on the on-disk board, not
+    uncommitted session changes — and note pcbnew rewrites the file in canonical
+    form. The in-memory board is refreshed afterward.
+
+    Args:
+        session_id: Optional session whose board to fill. Defaults to the
+            currently open board.
+    """
+    from .. import state
+    from ..backends import pcbnew_fill
+
+    if session_id:
+        mgr = _get_mgr()
+        try:
+            board_path: str | None = mgr.get_session(session_id).board_path
+        except KeyError:
+            return {"error": f"Session {session_id!r} not found"}
+    else:
+        board_path = state.get_board_path()
+    if not board_path:
+        return {"error": "No board loaded. Use open_project first."}
+
+    try:
+        result = pcbnew_fill.fill_zones(board_path)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    # Refresh the in-memory board with the filled (and canonicalized) file.
+    with contextlib.suppress(OSError):
+        state.load_board(board_path)
+    return {"status": "filled", **result}
+
+
 def _set_net_class_handler(
     session_id: str,
     name: str,
@@ -352,6 +391,23 @@ register_tool(
         "priority": {"type": "integer", "description": "Fill priority. Default: 0."},
     },
     handler=_add_copper_pour_handler,
+    category="netzone",
+)
+
+register_tool(
+    name="fill_zones",
+    description=(
+        "Fill all copper zones (compute filled_polygon) using pcbnew — kicad-cli "
+        "has no fill command. Run after committing zone creation; operates on the "
+        "on-disk board and refreshes the in-memory copy. Requires pcbnew."
+    ),
+    parameters={
+        "session_id": {
+            "type": "string",
+            "description": "Optional session whose board to fill. Defaults to the open board.",
+        },
+    },
+    handler=_fill_zones_handler,
     category="netzone",
 )
 
