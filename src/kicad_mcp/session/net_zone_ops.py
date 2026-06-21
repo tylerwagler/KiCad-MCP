@@ -11,6 +11,30 @@ from .helpers import find_footprint, footprint_field
 from .types import ChangeRecord, Session, _normalize_layer, require_active
 
 
+def _lookup_net(doc: Any, net_name: str) -> tuple[int | None, bool]:
+    """Resolve a net name against the board's top-level net table.
+
+    Returns ``(number, has_table)``. ``has_table`` is True when the board carries
+    a legacy ``(net N "name")`` table (KiCad <=9); KiCad 10 boards have none and
+    bind nets purely by name, in which case ``number`` is None. A None number on
+    a board that *does* have a table means the net is genuinely absent.
+    """
+    has_table = False
+    for net_node in doc.root.find_all("net"):
+        has_table = True
+        vals = net_node.atom_values
+        if len(vals) >= 2 and vals[1] == net_name:
+            return int(vals[0]), True
+    return None, has_table
+
+
+def _pad_net_clause(net_num: int | None, net_name: str) -> str:
+    """Serialized pad net reference: numbered (KiCad <=9) or by-name (KiCad 10)."""
+    if net_num is not None:
+        return f'(net {net_num} "{net_name}")'
+    return f'(net "{net_name}")'
+
+
 def apply_create_net(session: Session, net_name: str) -> ChangeRecord:
     """Add a new net to the board."""
     require_active(session)
@@ -94,13 +118,8 @@ def apply_assign_net(
     require_active(session)
     assert session._working_doc is not None
 
-    net_num = None
-    for net_node in session._working_doc.root.find_all("net"):
-        vals = net_node.atom_values
-        if len(vals) >= 2 and vals[1] == net_name:
-            net_num = int(vals[0])
-            break
-    if net_num is None:
+    net_num, has_table = _lookup_net(session._working_doc, net_name)
+    if has_table and net_num is None:
         raise ValueError(f"Net {net_name!r} not found on the board")
 
     fp_node = find_footprint(session._working_doc, reference)
@@ -122,7 +141,7 @@ def apply_assign_net(
     if existing_net is not None:
         target_pad.children.remove(existing_net)
 
-    net_child = sexp_parse(f'(net {net_num} "{net_name}")')
+    net_child = sexp_parse(_pad_net_clause(net_num, net_name))
     target_pad.children.append(net_child)
 
     after = target_pad.to_string()
@@ -276,20 +295,21 @@ def apply_create_zone(
 
     layer = _normalize_layer(layer)
 
-    net_num = None
-    for net_node in session._working_doc.root.find_all("net"):
-        vals = net_node.atom_values
-        if len(vals) >= 2 and vals[1] == net_name:
-            net_num = int(vals[0])
-            break
-    if net_num is None:
+    net_num, has_table = _lookup_net(session._working_doc, net_name)
+    if has_table and net_num is None:
         raise ValueError(f"Net {net_name!r} not found on the board")
+
+    # KiCad <=9 binds a zone by code + net_name; KiCad 10 binds purely by name.
+    if net_num is not None:
+        net_clause = f'(net {net_num}) (net_name "{net_name}")'
+    else:
+        net_clause = f'(net "{net_name}")'
 
     zone_uuid = str(uuid.uuid4())
     pts_strs = " ".join(f"(xy {x} {y})" for x, y in points)
 
     zone_sexp_text = (
-        f'(zone (net {net_num}) (net_name "{net_name}") (layer "{layer}")'
+        f'(zone {net_clause} (layer "{layer}")'
         f' (uuid "{zone_uuid}")'
         f" (hatch edge 0.5)"
         f" (priority {priority})"
