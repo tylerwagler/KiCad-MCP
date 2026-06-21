@@ -276,6 +276,161 @@ def apply_set_design_rules(session: Session, rules: dict[str, float]) -> ChangeR
     return record
 
 
+_COPPER_THICKNESS_DEFAULT = 0.035  # 1 oz copper, mm
+_MASK_THICKNESS = 0.01  # mm
+_DIELECTRIC_DEFAULTS = {"material": "FR4", "epsilon_r": 4.5, "loss_tangent": 0.02}
+
+
+def _default_dielectrics(copper_layers: int) -> list[dict[str, float | str]]:
+    """A symmetric FR-4 dielectric stack for ``copper_layers`` coppers.
+
+    There is one dielectric between each adjacent copper pair (N-1 total). The
+    outer gaps are 0.2 mm prepreg and the inner gaps share 1.0 mm of core, which
+    for a 4-layer board yields the conventional 0.2/1.0/0.2 stack (~1.6 mm).
+    """
+    gaps = copper_layers - 1
+    if gaps <= 1:
+        return [{"type": "core", "thickness": 1.51}]
+    core_count = gaps - 2
+    core_th = round(1.0 / core_count, 4) if core_count else 0.0
+    diels: list[dict[str, float | str]] = []
+    for i in range(gaps):
+        if i == 0 or i == gaps - 1:
+            diels.append({"type": "prepreg", "thickness": 0.2})
+        else:
+            diels.append({"type": "core", "thickness": core_th})
+    return diels
+
+
+def _stackup_layer(name: str, kind: str, thickness: float | None = None) -> str:
+    parts = [f'(layer "{name}" (type "{kind}")']
+    if thickness is not None:
+        parts.append(f"(thickness {thickness})")
+    return " ".join(parts) + ")"
+
+
+def _stackup_dielectric(index: int, spec: dict[str, float | str]) -> str:
+    kind = spec.get("type", "prepreg")
+    thickness = spec.get("thickness", 0.2)
+    material = spec.get("material", _DIELECTRIC_DEFAULTS["material"])
+    epsilon_r = spec.get("epsilon_r", _DIELECTRIC_DEFAULTS["epsilon_r"])
+    loss = spec.get("loss_tangent", _DIELECTRIC_DEFAULTS["loss_tangent"])
+    return (
+        f'(layer "dielectric {index}" (type "{kind}") (thickness {thickness})'
+        f' (material "{material}") (epsilon_r {epsilon_r}) (loss_tangent {loss}))'
+    )
+
+
+def apply_set_layer_stack(
+    session: Session,
+    copper_layers: int = 4,
+    dielectrics: list[dict[str, float | str]] | None = None,
+    copper_thickness: float = _COPPER_THICKNESS_DEFAULT,
+) -> ChangeRecord:
+    """Set the board copper-layer count and dielectric stackup.
+
+    Rewrites the ``(layers …)`` table to ``copper_layers`` coppers with KiCad's
+    numbering (F.Cu=0, In1.Cu=1, …, B.Cu=31) and writes a ``(setup (stackup …))``
+    with one dielectric between each adjacent copper pair. Non-copper layers are
+    preserved unchanged. ``dielectrics`` (if given) must hold exactly
+    ``copper_layers - 1`` entries, each a dict with optional keys
+    ``type``/``thickness``/``material``/``epsilon_r``/``loss_tangent``.
+    """
+    require_active(session)
+    assert session._working_doc is not None
+    doc = session._working_doc
+
+    if copper_layers < 2 or copper_layers > 32 or copper_layers % 2 != 0:
+        raise ValueError("copper_layers must be an even number between 2 and 32")
+
+    gaps = copper_layers - 1
+    diels = dielectrics if dielectrics is not None else _default_dielectrics(copper_layers)
+    if len(diels) != gaps:
+        raise ValueError(
+            f"{copper_layers}-layer board needs {gaps} dielectric layer(s), got {len(diels)}"
+        )
+
+    layers_node = doc.root.get("layers")
+    if layers_node is None:
+        raise ValueError("Board has no layers section")
+    setup_node = doc.root.get("setup")
+    if setup_node is None:
+        raise ValueError("Board has no setup section")
+
+    before = layers_node.to_string() + "\n" + setup_node.to_string()
+
+    # 1. Rewrite the copper rows of the layer table, preserving everything else.
+    copper_types: dict[str, str] = {}
+    other_rows: list[str] = []
+    for child in layers_node.children:
+        vals = child.atom_values
+        lname = vals[0] if vals else ""
+        if lname.endswith(".Cu"):
+            copper_types[lname] = vals[1] if len(vals) > 1 else "signal"
+        else:
+            other_rows.append(child.to_string())
+
+    inner = copper_layers - 2
+    copper_rows = [f'(0 "F.Cu" {copper_types.get("F.Cu", "signal")})']
+    copper_rows += [f'({i} "In{i}.Cu" signal)' for i in range(1, inner + 1)]
+    copper_rows.append(f'(31 "B.Cu" {copper_types.get("B.Cu", "signal")})')
+
+    new_layers = sexp_parse("(layers " + " ".join(copper_rows + other_rows) + ")")
+    layers_idx = doc.root.children.index(layers_node)
+    doc.root.children[layers_idx] = new_layers
+
+    # 2. Build the stackup, copper interleaved with dielectrics, top to bottom.
+    copper_names = ["F.Cu"] + [f"In{i}.Cu" for i in range(1, inner + 1)] + ["B.Cu"]
+    rows = [
+        _stackup_layer("F.SilkS", "Top Silk Screen"),
+        _stackup_layer("F.Paste", "Top Solder Paste"),
+        _stackup_layer("F.Mask", "Top Solder Mask", _MASK_THICKNESS),
+    ]
+    for ci, cu in enumerate(copper_names):
+        rows.append(_stackup_layer(cu, "copper", copper_thickness))
+        if ci < len(copper_names) - 1:
+            rows.append(_stackup_dielectric(ci + 1, diels[ci]))
+    rows += [
+        _stackup_layer("B.Mask", "Bottom Solder Mask", _MASK_THICKNESS),
+        _stackup_layer("B.Paste", "Bottom Solder Paste"),
+        _stackup_layer("B.SilkS", "Bottom Silk Screen"),
+        '(copper_finish "None")',
+        "(dielectric_constraints no)",
+    ]
+    stackup_node = sexp_parse("(stackup " + " ".join(rows) + ")")
+
+    existing_stackup = setup_node.get("stackup")
+    if existing_stackup is not None:
+        setup_node.children[setup_node.children.index(existing_stackup)] = stackup_node
+    else:
+        setup_node.children.insert(0, stackup_node)
+
+    # 3. Keep the overall board thickness in sync with the stack.
+    total = (
+        copper_thickness * copper_layers
+        + sum(float(d.get("thickness", 0.0)) for d in diels)
+        + 2 * _MASK_THICKNESS
+    )
+    general_node = doc.root.get("general")
+    if general_node is not None:
+        thick_node = general_node.get("thickness")
+        if thick_node is not None and thick_node.children:
+            thick_node.children[0] = _make_atom(str(round(total, 4)))
+
+    after = new_layers.to_string() + "\n" + setup_node.to_string()
+    record = ChangeRecord(
+        change_id=str(uuid.uuid4())[:8],
+        operation="set_layer_stack",
+        description=f"Set {copper_layers}-layer stackup ({round(total, 3)}mm)",
+        target="layers",
+        before_snapshot=before,
+        after_snapshot=after,
+        applied=True,
+    )
+    session.changes.append(record)
+    return record
+
+
 def apply_edit_component(
     session: Session, reference: str, properties: dict[str, str]
 ) -> ChangeRecord:

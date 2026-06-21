@@ -258,6 +258,17 @@ class SessionManager:
     def apply_set_design_rules(self, session: Session, rules: dict[str, float]) -> ChangeRecord:
         return board_setup_ops.apply_set_design_rules(session, rules)
 
+    def apply_set_layer_stack(
+        self,
+        session: Session,
+        copper_layers: int = 4,
+        dielectrics: list[dict[str, float | str]] | None = None,
+        copper_thickness: float = 0.035,
+    ) -> ChangeRecord:
+        return board_setup_ops.apply_set_layer_stack(
+            session, copper_layers, dielectrics, copper_thickness
+        )
+
     def apply_edit_component(
         self, session: Session, reference: str, properties: dict[str, str]
     ) -> ChangeRecord:
@@ -455,6 +466,18 @@ class SessionManager:
                 before_node = sexp_parse(record.before_snapshot)
                 idx = session._working_doc.root.children.index(setup_node)
                 session._working_doc.root.children[idx] = before_node
+
+        elif record.operation == "set_layer_stack":
+            # before_snapshot holds the prior layers + setup nodes; wrap so both
+            # parse out of one string, then restore each in place.
+            if record.before_snapshot:
+                wrapper = sexp_parse("(_ " + record.before_snapshot + ")")
+                root = session._working_doc.root
+                for key in ("layers", "setup"):
+                    prior = wrapper.get(key)
+                    current = root.get(key)
+                    if prior is not None and current is not None:
+                        root.children[root.children.index(current)] = prior
 
         elif record.operation == "edit_component":
             fp_node = find_footprint(session._working_doc, record.target)
