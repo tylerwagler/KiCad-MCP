@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 
 from ..constants import BOARD_OUTLINE_STROKE_WIDTH
 from ..sexp.parser import parse as sexp_parse
-from .helpers import find_footprint
+from .helpers import find_footprint, footprint_field
 from .types import (
     ChangeRecord,
     Session,
@@ -143,16 +144,38 @@ def apply_add_board_outline(session: Session, points: list[tuple[float, float]])
     return record
 
 
+def _next_reference(session: Session, prefix: str) -> str:
+    """Next free ``<prefix><n>`` designator given the board's existing refs."""
+    assert session._working_doc is not None
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+    max_n = 0
+    for fp_node in session._working_doc.root.find_all("footprint"):
+        ref = footprint_field(fp_node, "Reference")
+        match = pattern.match(ref) if ref else None
+        if match:
+            max_n = max(max_n, int(match.group(1)))
+    return f"{prefix}{max_n + 1}"
+
+
 def apply_add_mounting_hole(
     session: Session,
     x: float,
     y: float,
     drill: float = 3.2,
     pad_dia: float = 6.0,
+    reference: str | None = None,
 ) -> ChangeRecord:
-    """Insert a mounting hole footprint at the given position."""
+    """Insert a mounting hole footprint at the given position.
+
+    Auto-assigns the next free ``H<n>`` reference unless ``reference`` is given,
+    so placing several holes does not collide on a single ``H1``.
+    """
     require_active(session)
     assert session._working_doc is not None
+
+    ref = reference or _next_reference(session, "H")
+    if find_footprint(session._working_doc, ref) is not None:
+        raise ValueError(f"Component {ref!r} already exists on the board")
 
     hole_uuid = str(uuid.uuid4())
     ref_uuid = str(uuid.uuid4())
@@ -160,7 +183,7 @@ def apply_add_mounting_hole(
     fp_text = (
         f'(footprint "MountingHole:MountingHole_{drill}mm"'
         f' (layer "F.Cu") (uuid "{hole_uuid}") (at {x} {y})'
-        f' (property "Reference" "H1"'
+        f' (property "Reference" "{ref}"'
         f' (at 0 -{pad_dia / 2 + 1} 0) (layer "F.SilkS") (uuid "{ref_uuid}")'
         f" (effects (font (size 1 1) (thickness 0.15))))"
         f' (property "Value" "MountingHole"'
@@ -176,7 +199,7 @@ def apply_add_mounting_hole(
     record = ChangeRecord(
         change_id=str(uuid.uuid4())[:8],
         operation="add_mounting_hole",
-        description=f"Add mounting hole at ({x}, {y}) drill={drill}mm",
+        description=f"Add mounting hole {ref} at ({x}, {y}) drill={drill}mm",
         target=hole_uuid,  # Use full UUID for reliable identification
         before_snapshot="",
         after_snapshot=fp_node.to_string(),

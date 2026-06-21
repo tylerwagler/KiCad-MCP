@@ -508,3 +508,44 @@ class TestBoardOutlineStroke:
         mgr.apply_set_board_size(session, 50, 30)
         mgr.apply_add_board_outline(session, [(0, 0), (40, 0), (40, 30), (0, 30)])
         assert "BOARD_OUTLINE_STROKE_WIDTH" not in session._working_doc.root.to_string()
+
+
+class TestMountingHoleReferences:
+    """Mounting holes must get distinct refs (H1, H2, …), not all H1."""
+
+    def _make_session(self, tmp_path):
+        from kicad_mcp.tools.project import _minimal_kicad_pcb
+
+        board = tmp_path / "b.kicad_pcb"
+        board.write_text(_minimal_kicad_pcb())
+        mgr = SessionManager()
+        return mgr, mgr.start_session(Document.load(str(board)))
+
+    def _refs(self, doc):
+        from kicad_mcp.session.helpers import footprint_field
+
+        return [footprint_field(fp, "Reference") for fp in doc.root.find_all("footprint")]
+
+    def test_auto_increments(self, tmp_path):
+        mgr, session = self._make_session(tmp_path)
+        for _ in range(4):
+            mgr.apply_add_mounting_hole(session, 5, 5)
+        assert self._refs(session._working_doc) == ["H1", "H2", "H3", "H4"]
+
+    def test_explicit_reference_used(self, tmp_path):
+        mgr, session = self._make_session(tmp_path)
+        rec = mgr.apply_add_mounting_hole(session, 5, 5, reference="MH7")
+        assert "MH7" in rec.description
+        assert "MH7" in self._refs(session._working_doc)
+
+    def test_auto_increment_skips_existing_max(self, tmp_path):
+        mgr, session = self._make_session(tmp_path)
+        mgr.apply_add_mounting_hole(session, 5, 5, reference="H5")
+        mgr.apply_add_mounting_hole(session, 6, 6)  # should be H6, not H1
+        assert "H6" in self._refs(session._working_doc)
+
+    def test_duplicate_explicit_reference_raises(self, tmp_path):
+        mgr, session = self._make_session(tmp_path)
+        mgr.apply_add_mounting_hole(session, 5, 5, reference="H1")
+        with pytest.raises(ValueError, match="already exists"):
+            mgr.apply_add_mounting_hole(session, 6, 6, reference="H1")

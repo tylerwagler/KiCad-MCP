@@ -84,6 +84,9 @@ class Session:
     changes: list[ChangeRecord] = field(default_factory=list)
     _original_doc: Any | None = field(default=None, repr=False)
     _working_doc: Any | None = field(default=None, repr=False)
+    # Hash of the board file on disk when the session started, used to detect a
+    # commit landing on a board that changed underneath it (None if absent).
+    _base_disk_sig: str | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {

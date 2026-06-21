@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from typing import Any
 
@@ -53,18 +54,28 @@ def _start_session_handler() -> dict[str, Any]:
     }
 
 
-def _commit_session_handler(session_id: str) -> dict[str, Any]:
+def _commit_session_handler(session_id: str, force: bool = False) -> dict[str, Any]:
     """Commit all applied changes in a session to disk.
 
     Args:
         session_id: The session ID returned by start_session.
+        force: Commit even if the board file changed on disk since the session
+            started (overwrites that change). Default: False.
     """
+    from .. import state
+
     mgr = _get_manager()
     try:
         session = mgr.get_session(session_id)
     except KeyError:
         return {"error": f"Session {session_id!r} not found"}
-    return mgr.commit(session)
+    result = mgr.commit(session, force=force)
+    # Refresh the in-memory board so the next start_session sees the committed
+    # board, not a stale snapshot (which would revert this commit).
+    if result.get("status") == "committed" and session.board_path:
+        with contextlib.suppress(OSError):
+            state.load_board(session.board_path)
+    return result
 
 
 def _rollback_session_handler(session_id: str) -> dict[str, Any]:
@@ -168,8 +179,18 @@ register_tool(
 
 register_tool(
     name="commit_session",
-    description="Commit all applied changes in a session to disk.",
-    parameters={"session_id": {"type": "string", "description": "Session ID from start_session."}},
+    description=(
+        "Commit all applied changes in a session to disk. Refuses with "
+        "status='stale' if the board changed on disk since the session started "
+        "(pass force=true to overwrite)."
+    ),
+    parameters={
+        "session_id": {"type": "string", "description": "Session ID from start_session."},
+        "force": {
+            "type": "boolean",
+            "description": "Overwrite even if the board changed on disk. Default: false.",
+        },
+    },
     handler=_commit_session_handler,
     category="session",
     direct=True,

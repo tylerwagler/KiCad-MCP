@@ -9,8 +9,10 @@ operations or rollback the entire session.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import uuid
+from pathlib import Path
 from typing import Any
 
 from ..exceptions import ResourceNotFoundError
@@ -27,6 +29,14 @@ __all__ = ["ChangeRecord", "Session", "SessionManager", "SessionState"]
 
 # Re-export _VALID_SETUP_RULES from board_setup_ops for backward compatibility
 _VALID_SETUP_RULES = board_setup_ops._VALID_SETUP_RULES
+
+
+def _file_sig(path: str) -> str | None:
+    """Content hash of a board file on disk, or None if it does not exist yet."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 class SessionManager:
@@ -65,6 +75,7 @@ class SessionManager:
             board_path=str(doc.path),
             _original_doc=doc,
             _working_doc=deep_copy_doc(doc),
+            _base_disk_sig=_file_sig(str(doc.path)),
         )
         with self._lock:
             self._sessions[session_id] = session
@@ -240,8 +251,9 @@ class SessionManager:
         y: float,
         drill: float = 3.2,
         pad_dia: float = 6.0,
+        reference: str | None = None,
     ) -> ChangeRecord:
-        return board_setup_ops.apply_add_mounting_hole(session, x, y, drill, pad_dia)
+        return board_setup_ops.apply_add_mounting_hole(session, x, y, drill, pad_dia, reference)
 
     def apply_add_board_text(
         self,
@@ -518,8 +530,14 @@ class SessionManager:
 
     # ── Commit / Rollback ───────────────────────────────────────────
 
-    def commit(self, session: Session) -> dict[str, Any]:
-        """Commit all applied changes — write the modified board to disk."""
+    def commit(self, session: Session, force: bool = False) -> dict[str, Any]:
+        """Commit all applied changes — write the modified board to disk.
+
+        Refuses (unless ``force``) if the board file changed on disk since the
+        session started — committing would silently revert that change. This
+        guards the "start_session on a stale in-memory board" footgun where a
+        second session's commit clobbers an earlier commit.
+        """
         self._require_active(session)
         assert session._working_doc is not None
         assert session._original_doc is not None
@@ -529,6 +547,24 @@ class SessionManager:
             if not applied:
                 session.state = SessionState.COMMITTED
                 return {"status": "committed", "changes_written": 0}
+
+        current_sig = _file_sig(session.board_path)
+        if (
+            not force
+            and session._base_disk_sig is not None
+            and current_sig is not None
+            and current_sig != session._base_disk_sig
+        ):
+            return {
+                "status": "stale",
+                "error": (
+                    f"Board {session.board_path!r} changed on disk since this "
+                    "session started; committing would revert that change. "
+                    "Re-open the project (open_project) and redo this session, "
+                    "or pass force=true to overwrite."
+                ),
+                "board_path": session.board_path,
+            }
 
         # Map net numbers → names from the working doc so the IPC push binds nets
         # by name (net codes are deprecated in KiCad 10).

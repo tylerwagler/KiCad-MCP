@@ -179,6 +179,7 @@ def _add_mounting_hole_handler(
     y: float,
     drill: float = 3.2,
     pad_dia: float = 6.0,
+    reference: str | None = None,
 ) -> dict[str, Any]:
     """Add a mounting hole at the specified position.
 
@@ -188,11 +189,12 @@ def _add_mounting_hole_handler(
         y: Y position in mm.
         drill: Drill diameter in mm. Default: 3.2.
         pad_dia: Pad diameter in mm. Default: 6.0.
+        reference: Reference designator. Defaults to the next free H<n>.
     """
     mgr = _get_mgr()
     try:
         session = mgr.get_session(session_id)
-        record = mgr.apply_add_mounting_hole(session, x, y, drill, pad_dia)
+        record = mgr.apply_add_mounting_hole(session, x, y, drill, pad_dia, reference)
         return {"status": "added", "change": record.to_dict()}
     except KeyError:
         return {"error": f"Session {session_id!r} not found"}
@@ -372,6 +374,10 @@ register_tool(
         "y": {"type": "number", "description": "Y position in mm."},
         "drill": {"type": "number", "description": "Drill diameter (mm). Default: 3.2."},
         "pad_dia": {"type": "number", "description": "Pad diameter (mm). Default: 6.0."},
+        "reference": {
+            "type": "string",
+            "description": "Reference designator. Defaults to the next free H<n>.",
+        },
     },
     handler=_add_mounting_hole_handler,
     category="board_setup",
