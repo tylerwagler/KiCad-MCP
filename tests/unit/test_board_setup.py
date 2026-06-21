@@ -465,3 +465,46 @@ class TestBoardSetupToolHandlers:
             rules={"pad_to_mask_clearance": 0.1},
         )
         assert result["status"] == "updated"
+
+
+class TestBoardOutlineStroke:
+    """Regression: outline stroke width must be a number, not the literal
+    placeholder BOARD_OUTLINE_STROKE_WIDTH (which KiCad cannot parse)."""
+
+    def _make_session(self, tmp_path):
+        from kicad_mcp.tools.project import _minimal_kicad_pcb
+
+        board = tmp_path / "b.kicad_pcb"
+        board.write_text(_minimal_kicad_pcb())
+        mgr = SessionManager()
+        return mgr, mgr.start_session(Document.load(str(board)))
+
+    def _edge_lines(self, doc):
+        return [
+            c
+            for c in doc.root.children
+            if c.name == "gr_line" and c.get("layer") and c.get("layer").first_value == "Edge.Cuts"
+        ]
+
+    def test_set_board_size_writes_numeric_stroke(self, tmp_path):
+        mgr, session = self._make_session(tmp_path)
+        mgr.apply_set_board_size(session, 50, 30)
+        lines = self._edge_lines(session._working_doc)
+        assert lines
+        for line in lines:
+            width = line.get("stroke").get("width").first_value
+            assert float(width) > 0  # parses as a number
+
+    def test_add_board_outline_writes_numeric_stroke(self, tmp_path):
+        mgr, session = self._make_session(tmp_path)
+        mgr.apply_add_board_outline(session, [(0, 0), (40, 0), (40, 30), (0, 30)])
+        lines = self._edge_lines(session._working_doc)
+        assert lines
+        for line in lines:
+            float(line.get("stroke").get("width").first_value)
+
+    def test_no_unsubstituted_placeholder_in_output(self, tmp_path):
+        mgr, session = self._make_session(tmp_path)
+        mgr.apply_set_board_size(session, 50, 30)
+        mgr.apply_add_board_outline(session, [(0, 0), (40, 0), (40, 30), (0, 30)])
+        assert "BOARD_OUTLINE_STROKE_WIDTH" not in session._working_doc.root.to_string()
