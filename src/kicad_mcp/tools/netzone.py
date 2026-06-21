@@ -276,6 +276,72 @@ def _set_layer_constraints_handler(
         return {"error": str(exc)}
 
 
+def _set_net_class_handler(
+    session_id: str,
+    name: str,
+    clearance: float | None = None,
+    track_width: float | None = None,
+    via_diameter: float | None = None,
+    via_drill: float | None = None,
+    diff_pair_width: float | None = None,
+    diff_pair_gap: float | None = None,
+    microvia_diameter: float | None = None,
+    microvia_drill: float | None = None,
+    nets: list[str] | None = None,
+    patterns: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create or update a net class in the .kicad_pro and assign nets to it.
+
+    KiCad 7+ stores net classes in the project file (net_settings.classes), which
+    is where run_drc/kicad-cli read clearance, track width, and via rules. Use
+    this (not the legacy in-board add_net_class) to make DRC enforce per-class
+    intent — e.g. a wide-clearance class across an isolation barrier. Writes the
+    .kicad_pro directly; it is not part of the session's undo stack.
+
+    Args:
+        session_id: Active session ID (used to locate the .kicad_pro).
+        name: Net class name (created if absent, updated if present).
+        clearance: Min clearance (mm).
+        track_width: Default track width (mm).
+        via_diameter: Via pad diameter (mm).
+        via_drill: Via drill (mm).
+        diff_pair_width: Differential pair width (mm).
+        diff_pair_gap: Differential pair gap (mm).
+        microvia_diameter: Microvia diameter (mm).
+        microvia_drill: Microvia drill (mm).
+        nets: Exact net names to assign to this class.
+        patterns: Wildcard net patterns (e.g. '/ISO_*') to assign to this class.
+    """
+    from ..session import project_settings
+
+    fields = {
+        "clearance": clearance,
+        "track_width": track_width,
+        "via_diameter": via_diameter,
+        "via_drill": via_drill,
+        "diff_pair_width": diff_pair_width,
+        "diff_pair_gap": diff_pair_gap,
+        "microvia_diameter": microvia_diameter,
+        "microvia_drill": microvia_drill,
+    }
+    fields = {k: v for k, v in fields.items() if v is not None}
+
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+    if not session.board_path:
+        return {"error": "Session has no board path; cannot locate .kicad_pro"}
+    try:
+        result = project_settings.set_net_class(
+            session.board_path, name, fields, nets=nets, patterns=patterns
+        )
+        return {"status": "updated", **result}
+    except (ValueError, FileNotFoundError) as exc:
+        return {"error": str(exc)}
+
+
 register_tool(
     name="add_copper_pour",
     description="Add a copper pour filling the board outline on a layer.",
@@ -290,8 +356,38 @@ register_tool(
 )
 
 register_tool(
+    name="set_net_class",
+    description=(
+        "Create/update a net class in the .kicad_pro (net_settings.classes) and "
+        "assign nets to it — the KiCad 7+ location run_drc reads. Use this for "
+        "DRC-enforced per-class rules (e.g. a wide-clearance isolation class). "
+        "Pass exact net names via 'nets' or wildcards via 'patterns'."
+    ),
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "name": {"type": "string", "description": "Net class name."},
+        "clearance": {"type": "number", "description": "Min clearance (mm)."},
+        "track_width": {"type": "number", "description": "Track width (mm)."},
+        "via_diameter": {"type": "number", "description": "Via pad diameter (mm)."},
+        "via_drill": {"type": "number", "description": "Via drill (mm)."},
+        "diff_pair_width": {"type": "number", "description": "Diff-pair width (mm)."},
+        "diff_pair_gap": {"type": "number", "description": "Diff-pair gap (mm)."},
+        "microvia_diameter": {"type": "number", "description": "Microvia diameter (mm)."},
+        "microvia_drill": {"type": "number", "description": "Microvia drill (mm)."},
+        "nets": {"type": "array", "description": "Exact net names to assign. Optional."},
+        "patterns": {"type": "array", "description": "Wildcard net patterns. Optional."},
+    },
+    handler=_set_net_class_handler,
+    category="netzone",
+)
+
+register_tool(
     name="add_net_class",
-    description="Add a net class with clearance, trace width, and via settings.",
+    description=(
+        "Legacy: add a net class to the .kicad_pcb setup section (KiCad 6 and "
+        "earlier). KiCad 7+ ignores in-board net classes — use set_net_class "
+        "(writes the .kicad_pro) so run_drc honors it."
+    ),
     parameters={
         "session_id": {"type": "string", "description": "Active session ID."},
         "name": {"type": "string", "description": "Net class name (e.g., 'Power')."},

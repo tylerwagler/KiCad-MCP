@@ -65,6 +65,69 @@ def _set_design_rules_handler(
         return {"error": str(exc)}
 
 
+def _set_layer_stack_handler(
+    session_id: str,
+    copper_layers: int = 4,
+    dielectrics: list[dict[str, Any]] | None = None,
+    copper_thickness: float = 0.035,
+) -> dict[str, Any]:
+    """Set the board copper-layer count and dielectric stackup.
+
+    Converts the board to ``copper_layers`` coppers (2/4/6/8…, even) with KiCad
+    numbering (F.Cu=0, In1.Cu=1, …, B.Cu=31) and writes a matching
+    ``(setup (stackup …))``. Non-copper layers are preserved.
+
+    Args:
+        session_id: Active session ID.
+        copper_layers: Number of copper layers (even, 2–32). Default: 4.
+        dielectrics: Optional list of per-gap dicts (exactly copper_layers-1),
+            each with optional keys type/thickness/material/epsilon_r/loss_tangent.
+            Omit for a symmetric FR-4 default (4-layer → 0.2/1.0/0.2 mm).
+        copper_thickness: Copper layer thickness in mm. Default: 0.035 (1 oz).
+    """
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+        record = mgr.apply_set_layer_stack(session, copper_layers, dielectrics, copper_thickness)
+        return {"status": "updated", "change": record.to_dict()}
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+def _set_board_constraints_handler(
+    session_id: str,
+    rules: dict[str, float],
+) -> dict[str, Any]:
+    """Write board-level minimum constraints to the project's .kicad_pro.
+
+    These are the global DRC minimums (min track width, clearance, via size,
+    annular width, hole sizes) that live in board.design_settings.rules in the
+    KiCad 7+ project file — where kicad-cli/run_drc reads them. This writes the
+    .kicad_pro directly; it is not part of the session's undo stack.
+
+    Args:
+        session_id: Active session ID (used to locate the .kicad_pro).
+        rules: Constraint name -> value in mm. Aliases accepted, e.g.
+            min_track, min_space, min_annular_width, min_via_drill.
+    """
+    from ..session import project_settings
+
+    mgr = _get_mgr()
+    try:
+        session = mgr.get_session(session_id)
+    except KeyError:
+        return {"error": f"Session {session_id!r} not found"}
+    if not session.board_path:
+        return {"error": "Session has no board path; cannot locate .kicad_pro"}
+    try:
+        result = project_settings.set_board_constraints(session.board_path, rules)
+        return {"status": "updated", **result}
+    except (ValueError, FileNotFoundError) as exc:
+        return {"error": str(exc)}
+
+
 def _set_board_size_handler(
     session_id: str,
     width: float,
@@ -217,6 +280,60 @@ register_tool(
         },
     },
     handler=_set_design_rules_handler,
+    category="board_setup",
+)
+
+register_tool(
+    name="set_board_constraints",
+    description=(
+        "Set board-level DRC minimums (min track width, clearance, via "
+        "diameter, via/hole drill, annular width, hole-to-hole) in the .kicad_pro "
+        "project file, where run_drc reads them. Aliases: min_track, min_space, "
+        "min_annular_width, min_via_drill. Writes the project file directly."
+    ),
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "rules": {
+            "type": "object",
+            "description": (
+                "Constraint name -> value in mm, e.g. "
+                "{'min_track_width': 0.127, 'min_clearance': 0.127, "
+                "'min_via_diameter': 0.4, 'min_via_drill': 0.2, "
+                "'min_annular_width': 0.1}."
+            ),
+        },
+    },
+    handler=_set_board_constraints_handler,
+    category="board_setup",
+)
+
+register_tool(
+    name="set_layer_stack",
+    description=(
+        "Set the board copper-layer count (2/4/6/8…, even) and dielectric "
+        "stackup. Renumbers copper (F.Cu=0, In1.Cu=1, …, B.Cu=31), preserves "
+        "non-copper layers, and writes (setup (stackup …)). Omit 'dielectrics' "
+        "for a symmetric FR-4 default (4-layer → 0.2/1.0/0.2 mm)."
+    ),
+    parameters={
+        "session_id": {"type": "string", "description": "Active session ID."},
+        "copper_layers": {
+            "type": "integer",
+            "description": "Number of copper layers (even, 2–32). Default: 4.",
+        },
+        "dielectrics": {
+            "type": "array",
+            "description": (
+                "Optional list of (copper_layers-1) dicts, each with optional "
+                "keys type/thickness/material/epsilon_r/loss_tangent."
+            ),
+        },
+        "copper_thickness": {
+            "type": "number",
+            "description": "Copper thickness in mm. Default: 0.035 (1 oz).",
+        },
+    },
+    handler=_set_layer_stack_handler,
     category="board_setup",
 )
 
