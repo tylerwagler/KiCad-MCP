@@ -6,6 +6,35 @@ from ..sexp import Document, SExp
 from ..sexp.parser import parse as sexp_parse
 
 
+def footprint_field(fp_node: SExp, field: str) -> str | None:
+    """Read a footprint field (``Reference`` or ``Value``) in either format.
+
+    KiCad 7+ stores these as ``(property "Reference" "R1" …)``. Footprints
+    imported from KiCad 6 or older ``.kicad_mod`` files instead declare them
+    with the legacy ``(fp_text reference "R1" …)`` syntax. Matching both keeps
+    placement and net assignment from silently skipping legacy footprints.
+
+    Args:
+        fp_node: A ``footprint`` node.
+        field: ``"Reference"`` or ``"Value"`` (case-insensitive).
+
+    Returns:
+        The field text, or None if absent.
+    """
+    for prop in fp_node.find_all("property"):
+        if prop.first_value == field:
+            vals = prop.atom_values
+            if len(vals) > 1:
+                return vals[1]
+    # Legacy fp_text: the kind keyword is lowercase ("reference"/"value").
+    legacy_kind = field.lower()
+    for ft in fp_node.find_all("fp_text"):
+        vals = ft.atom_values
+        if len(vals) > 1 and vals[0] == legacy_kind:
+            return vals[1]
+    return None
+
+
 def find_footprint(doc: Document, reference: str) -> SExp | None:
     """Find a footprint node by reference designator.
 
@@ -17,11 +46,8 @@ def find_footprint(doc: Document, reference: str) -> SExp | None:
         The footprint node if found, None otherwise.
     """
     for fp_node in doc.root.find_all("footprint"):
-        for prop in fp_node.find_all("property"):
-            if prop.first_value == "Reference":
-                vals = prop.atom_values
-                if len(vals) > 1 and vals[1] == reference:
-                    return fp_node
+        if footprint_field(fp_node, "Reference") == reference:
+            return fp_node
     return None
 
 

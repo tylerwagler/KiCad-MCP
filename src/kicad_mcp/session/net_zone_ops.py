@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from ..sexp.parser import parse as sexp_parse
-from .helpers import find_footprint
+from .helpers import find_footprint, footprint_field
 from .types import ChangeRecord, Session, _normalize_layer, require_active
 
 
@@ -144,16 +144,9 @@ def _board_footprints(doc: Any) -> dict[str, str | None]:
     """Map reference -> current Value for every footprint on the board."""
     out: dict[str, str | None] = {}
     for fp in doc.root.find_all("footprint"):
-        ref = None
-        val = None
-        for prop in fp.find_all("property"):
-            pv = prop.atom_values
-            if prop.first_value == "Reference" and len(pv) > 1:
-                ref = pv[1]
-            elif prop.first_value == "Value" and len(pv) > 1:
-                val = pv[1]
+        ref = footprint_field(fp, "Reference")
         if ref:
-            out[ref] = val
+            out[ref] = footprint_field(fp, "Value")
     return out
 
 

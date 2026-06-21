@@ -239,6 +239,38 @@ def apply_place(
     return record
 
 
+def _normalize_legacy_fp_text(fp_node: SExp) -> None:
+    """Rewrite legacy ``(fp_text reference|value …)`` as modern ``(property …)``.
+
+    KiCad 6-and-older ``.kicad_mod`` files declare the reference and value with
+    ``fp_text``; KiCad migrates these on load, but our parser does not. Without
+    this, the reference/value never get stamped and ``find_footprint`` cannot
+    locate the placed footprint — so a later net assignment silently skips every
+    pad. Converting in place keeps the board in the modern property form.
+    """
+    legacy_names = {"reference": "Reference", "value": "Value"}
+    for node in fp_node.find_all("fp_text"):
+        vals = node.atom_values
+        if not vals:
+            continue
+        prop_name = legacy_names.get(vals[0])
+        if prop_name is None:
+            continue
+        # Skip if a modern property of the same kind already exists.
+        if any(p.first_value == prop_name for p in fp_node.find_all("property")):
+            continue
+        node.name = "property"
+        # Replace the leading keyword atom ("reference"/"value") with the
+        # quoted property name ("Reference"/"Value").
+        for i, child in enumerate(node.children):
+            if child.is_atom:
+                node.children[i] = _make_quoted(prop_name)
+                break
+        # Modern properties carry a uuid; add one if the legacy node lacked it.
+        if node.get("uuid") is None:
+            node.children.append(_make_node("uuid", [_make_quoted(str(uuid.uuid4()))]))
+
+
 def place_from_kicad_mod(
     session: Session,
     kicad_mod_path: str,
@@ -264,6 +296,7 @@ def place_from_kicad_mod(
 
     raw = mod_path.read_text(encoding="utf-8")
     fp_node = sexp_parse(raw)
+    _normalize_legacy_fp_text(fp_node)
 
     at_node = fp_node.get("at")
     if at_node is None:
