@@ -39,16 +39,76 @@ def _extract_position(node: SExp | None) -> Position:
     return Position(x, y, angle)
 
 
+def _looks_like_int(val: str | None) -> bool:
+    if val is None:
+        return False
+    try:
+        int(val)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def read_net_ref(net_node: SExp | None) -> tuple[int | None, str | None]:
+    """Read a pad/segment/zone net reference in either KiCad format.
+
+    KiCad <=9 writes ``(net <number> "name")`` (or a bare ``(net <number>)``).
+    KiCad 10 deprecated net codes and writes ``(net "name")`` — bound by name.
+    Returns ``(number, name)`` with either element None when absent.
+    """
+    if net_node is None:
+        return None, None
+    vals = net_node.atom_values
+    if len(vals) >= 2:
+        return _int(vals[0]), vals[1]
+    if len(vals) == 1:
+        only = vals[0]
+        if _looks_like_int(only):
+            return _int(only), None
+        return None, only
+    return None, None
+
+
 def extract_nets(doc: Document) -> list[Net]:
-    """Extract all nets from a board document."""
+    """Extract all nets from a board document.
+
+    Handles both the legacy top-level ``(net N "name")`` table (KiCad <=9) and
+    the KiCad 10 form where no table exists and nets are referenced by name on
+    pads/tracks/zones. In the latter case the net list is derived from those
+    named references with synthetic, stable-ordered numbers.
+    """
     nets: list[Net] = []
+    seen: set[str] = set()
     for node in doc.root.find_all("net"):
-        vals = node.atom_values
-        if len(vals) >= 2:
-            nets.append(Net(number=_int(vals[0]), name=vals[1]))
-        elif len(vals) == 1:
-            nets.append(Net(number=_int(vals[0]), name=""))
-    return nets
+        number, name = read_net_ref(node)
+        nm = name or ""
+        nets.append(Net(number=number if number is not None else len(nets), name=nm))
+        seen.add(nm)
+    if nets:
+        return nets
+
+    # KiCad 10: no net table — derive distinct named nets from the board.
+    names: list[str] = []
+
+    def _consider(name: str | None) -> None:
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+
+    for fp_node in doc.root.find_all("footprint"):
+        for pad_node in fp_node.find_all("pad"):
+            _consider(read_net_ref(pad_node.get("net"))[1])
+    for tag in ("segment", "via", "arc"):
+        for node in doc.root.find_all(tag):
+            _consider(read_net_ref(node.get("net"))[1])
+    for zone_node in doc.root.find_all("zone"):
+        name_node = zone_node.get("net_name")
+        if name_node is not None and name_node.first_value:
+            _consider(name_node.first_value)
+        else:
+            _consider(read_net_ref(zone_node.get("net"))[1])
+
+    return [Net(number=i, name=nm) for i, nm in enumerate(names, start=1)]
 
 
 def extract_layers(doc: Document) -> list[Layer]:
@@ -100,13 +160,7 @@ def extract_pad(pad_node: SExp) -> Pad:
     layers_node = pad_node.get("layers")
     layers = layers_node.atom_values if layers_node else []
 
-    net_node = pad_node.get("net")
-    net_number = None
-    net_name = None
-    if net_node:
-        net_vals = net_node.atom_values
-        net_number = _int(net_vals[0]) if len(net_vals) > 0 else None
-        net_name = net_vals[1] if len(net_vals) > 1 else None
+    net_number, net_name = read_net_ref(pad_node.get("net"))
 
     return Pad(
         number=number,

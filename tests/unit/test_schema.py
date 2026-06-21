@@ -18,6 +18,7 @@ from kicad_mcp.schema import (
     extract_nets,
     extract_segments,
 )
+from kicad_mcp.schema.extract import read_net_ref
 from kicad_mcp.sexp import Document
 
 BLINKY_PATH = Path(r"C:\Users\tyler\Dev\repos\test_PCB\blinky.kicad_pcb")
@@ -152,3 +153,72 @@ class TestExtractFromBlinky:
         # Some references may repeat (e.g. virtual/test footprints share refs)
         unique = set(refs)
         assert len(unique) >= 20
+
+
+class TestNetReferenceFormats:
+    """KiCad 10 dropped the top-level net table and writes pad nets by name."""
+
+    # A KiCad-10-style board: no (net N "name") table; pad nets are (net "name").
+    _KI10 = """\
+(kicad_pcb (version 20241229) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal))
+  (footprint "R" (layer "F.Cu") (at 0 0)
+    (property "Reference" "R1" (at 0 0))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net "/GND"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net "/VCC")))
+  (footprint "C" (layer "F.Cu") (at 5 0)
+    (property "Reference" "C1" (at 0 0))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net "/VCC"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu"))))
+"""
+
+    _LEGACY = """\
+(kicad_pcb (version 20240108) (generator "pcbnew")
+  (net 0 "") (net 1 "/GND") (net 2 "/VCC")
+  (footprint "R" (layer "F.Cu") (at 0 0)
+    (property "Reference" "R1" (at 0 0))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net 1 "/GND"))))
+"""
+
+    def _doc(self, text):
+        from kicad_mcp.sexp import Document
+        from kicad_mcp.sexp.parser import parse
+
+        return Document(path=None, root=parse(text), raw_text=text)
+
+    def test_read_net_ref_numbered(self):
+        from kicad_mcp.sexp.parser import parse
+
+        assert read_net_ref(parse('(net 9 "/GND")')) == (9, "/GND")
+
+    def test_read_net_ref_named(self):
+        from kicad_mcp.sexp.parser import parse
+
+        assert read_net_ref(parse('(net "/GND")')) == (None, "/GND")
+
+    def test_read_net_ref_bare_number_and_none(self):
+        from kicad_mcp.sexp.parser import parse
+
+        assert read_net_ref(parse("(net 5)")) == (5, None)
+        assert read_net_ref(None) == (None, None)
+
+    def test_kicad10_derives_nets_from_named_pads(self):
+        nets = extract_nets(self._doc(self._KI10))
+        names = {n.name for n in nets}
+        assert names == {"/GND", "/VCC"}  # deduped across pads
+        assert all(n.number > 0 for n in nets)  # synthetic, stable numbers
+
+    def test_kicad10_pad_net_name_read(self):
+        doc = self._doc(self._KI10)
+        from kicad_mcp.schema.extract import extract_footprints
+
+        pads = {(fp.reference, p.number): p for fp in extract_footprints(doc) for p in fp.pads}
+        gnd = pads[("R1", "1")]
+        assert gnd.net_name == "/GND"
+        assert gnd.net_number is None
+        # An unconnected pad has no net.
+        assert pads[("C1", "2")].net_name is None
+
+    def test_legacy_net_table_still_parsed(self):
+        nets = extract_nets(self._doc(self._LEGACY))
+        assert [(n.number, n.name) for n in nets] == [(0, ""), (1, "/GND"), (2, "/VCC")]
