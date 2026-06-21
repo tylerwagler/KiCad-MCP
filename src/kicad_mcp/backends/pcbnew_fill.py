@@ -35,7 +35,7 @@ _MARKER = "FILL_RESULT "
 def is_available() -> bool:
     """Whether pcbnew can be imported in THIS interpreter."""
     try:
-        import pcbnew  # type: ignore  # noqa: F401
+        import pcbnew  # noqa: F401
 
         return True
     except ImportError:
