@@ -104,14 +104,16 @@ def fill_zones(board_path: str) -> dict[str, Any]:
         count = len(list(board.Zones()))
         pcbnew.ZONE_FILLER(board).Fill(board.Zones())
         pcbnew.SaveBoard(board_path, board)
-        return {"filled": count}
+        return {"filled": count, "backend": "pcbnew"}
 
     py = _python_with_pcbnew()
     if py is None:
         raise RuntimeError(
-            "pcbnew (KiCad's Python module) is required to fill zones and was not "
-            "found in this interpreter or any candidate Python. Set KICAD_PYTHON "
-            "to a Python that can 'import pcbnew' (KiCad's bundled interpreter)."
+            "No zone-fill engine available. The IPC API (kipy) could not fill "
+            "headlessly (KiCad 11+ with 'kicad-cli api-server', or a running "
+            "KiCad, is required), and pcbnew (KiCad's Python module, removed in "
+            "KiCad 11) was not found in this interpreter or any candidate Python. "
+            "Set KICAD_PYTHON to a Python that can 'import pcbnew' on KiCad <= 10."
         )
     try:
         proc = subprocess.run(
@@ -128,5 +130,6 @@ def fill_zones(board_path: str) -> dict[str, Any]:
     for line in proc.stdout.splitlines():
         if line.startswith(_MARKER):
             result: dict[str, Any] = json.loads(line[len(_MARKER) :])
+            result.setdefault("backend", "pcbnew")
             return result
     raise RuntimeError("Zone fill produced no result marker.")

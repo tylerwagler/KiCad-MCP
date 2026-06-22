@@ -278,21 +278,22 @@ def _set_layer_constraints_handler(
 
 
 def _fill_zones_handler(session_id: str | None = None) -> dict[str, Any]:
-    """Fill all copper zones (compute filled_polygon) via pcbnew.
+    """Fill all copper zones (compute filled_polygon), IPC-first.
 
     create_zone/add_copper_pour write only the zone outline; a zone is
     electrically empty until filled, which throws off DRC, render, and routing.
-    kicad-cli has no fill command, so this uses pcbnew's ZONE_FILLER on the board
-    file. Commit the session first — fill operates on the on-disk board, not
-    uncommitted session changes — and note pcbnew rewrites the file in canonical
-    form. The in-memory board is refreshed afterward.
+    kicad-cli has no fill command, so this uses the IPC API (kipy refill_zones)
+    when available — the only path on KiCad 11 — and falls back to pcbnew's
+    ZONE_FILLER on KiCad <= 10. Commit the session first — fill operates on the
+    on-disk board, not uncommitted session changes — and note the engine may
+    rewrite the file in canonical form. The in-memory board is refreshed after.
 
     Args:
         session_id: Optional session whose board to fill. Defaults to the
             currently open board.
     """
     from .. import state
-    from ..backends import pcbnew_fill
+    from ..backends import zone_fill
 
     if session_id:
         mgr = _get_mgr()
@@ -306,7 +307,7 @@ def _fill_zones_handler(session_id: str | None = None) -> dict[str, Any]:
         return {"error": "No board loaded. Use open_project first."}
 
     try:
-        result = pcbnew_fill.fill_zones(board_path)
+        result = zone_fill.fill_zones(board_path)
     except RuntimeError as exc:
         return {"error": str(exc)}
     # Refresh the in-memory board with the filled (and canonicalized) file.
@@ -397,9 +398,10 @@ register_tool(
 register_tool(
     name="fill_zones",
     description=(
-        "Fill all copper zones (compute filled_polygon) using pcbnew — kicad-cli "
-        "has no fill command. Run after committing zone creation; operates on the "
-        "on-disk board and refreshes the in-memory copy. Requires pcbnew."
+        "Fill all copper zones (compute filled_polygon). Uses the KiCad IPC API "
+        "(kipy) when available — the only path on KiCad 11 — and falls back to "
+        "pcbnew on KiCad <= 10. Run after committing zone creation; operates on "
+        "the on-disk board and refreshes the in-memory copy."
     ),
     parameters={
         "session_id": {
